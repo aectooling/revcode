@@ -1,0 +1,29 @@
+name: Check
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: npm ci
+      - run: npm run check
+      - run: dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release
+      - run: dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release
+      # Revit add-ins need the installed Autodesk API assemblies; run packaged
+      # native smoke tests on a licensed Windows workstation, not hosted CI.
