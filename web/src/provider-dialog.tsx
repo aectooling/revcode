@@ -1,4 +1,17 @@
+import { ArrowLeft, ChevronRight, Loader2, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "./components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Textarea } from "./components/ui/textarea";
+import { providerLabel, safeExternalUrl } from "./lib/utils";
 
 export type Provider = {
   id: string;
@@ -47,22 +60,6 @@ function credentialDescription(provider: Provider) {
   return "Saved credentials";
 }
 
-function safeSignInUrl(value?: string) {
-  if (!value) return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ||
-      (url.protocol === "http:" &&
-        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// Follows Hoppercode's provider overview → catalog → setup → model selection flow.
-// The local host owns all credentials and provider-specific Pi authentication prompts.
 export function ProviderDialog({
   providers,
   auth,
@@ -89,7 +86,6 @@ export function ProviderDialog({
   const [baseUrl, setBaseUrl] = useState("");
   const [modelIds, setModelIds] = useState("");
   const [noAuth, setNoAuth] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
   const completed = useRef(auth?.completedCount || 0);
   const submitted = useRef(!!auth?.busy);
   const requesting = useRef(false);
@@ -104,11 +100,8 @@ export function ProviderDialog({
       ? selected.model
       : models[0]?.id || "";
   const methods = provider?.authMethods || [];
-  const url = safeSignInUrl(activeAuth?.url);
+  const url = safeExternalUrl(activeAuth?.url);
 
-  useEffect(() => {
-    dialog.current?.showModal();
-  }, []);
   useEffect(() => {
     if ((auth?.completedCount || 0) !== completed.current) {
       completed.current = auth?.completedCount || 0;
@@ -119,6 +112,12 @@ export function ProviderDialog({
       }
     }
   }, [auth?.completedCount]);
+  useEffect(() => {
+    if (auth?.busy || auth?.request) {
+      setView("setup");
+      if (auth.provider) setProviderId(auth.provider);
+    }
+  }, [auth?.busy, auth?.provider, auth?.request?.requestId]);
   useEffect(() => {
     setAnswer("");
   }, [activeAuth?.request?.requestId]);
@@ -205,15 +204,15 @@ export function ProviderDialog({
       setError("A provider with this name already exists.");
       return;
     }
-    const models = [
+    const parsedModels = [
       ...new Set(
         modelIds
           .split(/[\n,]/)
           .map((value) => value.trim())
           .filter(Boolean),
       ),
-    ].map((id) => ({ id }));
-    if (!models.length) {
+    ].map((value) => ({ id: value }));
+    if (!parsedModels.length) {
       setError("Enter at least one model ID.");
       return;
     }
@@ -226,7 +225,7 @@ export function ProviderDialog({
         id,
         name: customName.trim(),
         baseUrl: baseUrl.trim(),
-        models,
+        models: parsedModels,
         ...(!noAuth && apiKey ? { apiKey } : {}),
       },
       () => setView("success"),
@@ -234,24 +233,22 @@ export function ProviderDialog({
   }
 
   const modelPicker = models.length ? (
-    <div className="provider-model-picker">
-      <label htmlFor="provider-model">
-        Model
-        <select
-          id="provider-model"
-          value={chosenModel}
-          onChange={(event) => setModelId(event.target.value)}
-          disabled={busy}
-        >
-          {models.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name || item.id}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        className="primary-button"
+    <div className="grid gap-2">
+      <Label htmlFor="provider-model">Model</Label>
+      <select
+        id="provider-model"
+        className="flex h-8 w-full rounded-sm border border-line bg-surface px-2.5 text-[13px] outline-none transition-colors hover:border-line-strong focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
+        value={chosenModel}
+        disabled={busy}
+        onChange={(event) => setModelId(event.target.value)}
+      >
+        {models.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.name || item.id}
+          </option>
+        ))}
+      </select>
+      <Button
         disabled={busy || !chosenModel}
         onClick={() =>
           void action(
@@ -262,31 +259,45 @@ export function ProviderDialog({
         }
       >
         Use this model
-      </button>
-      <p className="key-help">
+      </Button>
+      <p className="text-xs text-muted">
         Your current model stays selected until you choose another. Model access
         is checked when you send a message.
       </p>
     </div>
   ) : (
-    <p>
+    <p className="text-sm text-muted">
       No models are available yet. Refresh the provider after completing setup.
     </p>
   );
 
   return (
-    <div className="modal-backdrop">
-      <dialog
-        ref={dialog}
-        aria-labelledby="settings-title"
-        className="settings-dialog provider-dialog"
-        onCancel={(event) => {
-          event.preventDefault();
-          void close();
-        }}
-      >
-        <div className="section-heading">
-          <h2 id="settings-title">
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) void close();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          {view !== "overview" && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mb-1 w-fit -ml-2"
+              disabled={busy}
+              onClick={() =>
+                navigate(
+                  view === "setup" || view === "custom" ? "catalog" : "overview",
+                )
+              }
+            >
+              <ArrowLeft className="size-3.5" />
+              Back
+            </Button>
+          )}
+          <DialogTitle>
             {view === "overview"
               ? "Model providers"
               : view === "catalog"
@@ -296,83 +307,57 @@ export function ProviderDialog({
                   : view === "success"
                     ? "Provider connected"
                     : provider?.name || providerId || "Provider setup"}
-          </h2>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Close settings"
-            disabled={pending}
-            onClick={() => void close()}
-          >
-            ×
-          </button>
-        </div>
-        <p>
-          {view === "overview"
-            ? "Manage the model providers available to Revcode."
-            : view === "catalog"
-              ? "Choose a provider supported by Pi."
-              : view === "success"
-                ? "Choose a model to use, or keep your current selection."
-                : "Configure access and choose a model."}
-        </p>
-        {view !== "overview" && (
-          <button
-            type="button"
-            className="text-button provider-back"
-            disabled={busy}
-            onClick={() =>
-              navigate(
-                view === "setup" || view === "custom" ? "catalog" : "overview",
-              )
-            }
-          >
-            ← Back
-          </button>
-        )}
+          </DialogTitle>
+          <DialogDescription>
+            {view === "overview"
+              ? "Manage the model providers available to Revcode."
+              : view === "catalog"
+                ? "Choose a provider supported by Pi."
+                : view === "success"
+                  ? "Choose a model to use, or keep your current selection."
+                  : "Configure access and choose a model."}
+          </DialogDescription>
+        </DialogHeader>
 
         {view === "overview" && (
           <>
-            <div className="provider-list">
+            <div className="grid gap-2">
               {providers
                 .filter((item) => item.authenticated)
                 .map((item) => (
                   <button
-                    className="provider-row"
                     key={item.id}
+                    type="button"
+                    className="flex items-center gap-3 rounded-md border border-line p-3 text-left hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                     disabled={busy}
                     onClick={() => choose(item)}
                   >
-                    <span>
-                      <strong>{item.name || item.id}</strong>
-                      <small>
-                        {credentialDescription(item)} · {item.models.length}{" "}
-                        models
-                      </small>
-                    </span>
-                    <span aria-hidden="true">›</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{item.name || item.id}</p>
+                      <p className="text-xs text-muted">
+                        {credentialDescription(item)} · {item.models.length} models
+                      </p>
+                    </div>
+                    <ChevronRight className="size-4 shrink-0 text-muted" />
                   </button>
                 ))}
             </div>
             {!providers.some((item) => item.authenticated) && (
-              <div className="provider-empty">
-                <strong>Connect your first provider</strong>
-                <p>
-                  Choose browser sign-in or an API key. Existing credentials
-                  appear here when available to the local host.
+              <div className="rounded-md border border-dashed border-line p-6 text-center">
+                <p className="text-sm font-medium">Connect your first provider</p>
+                <p className="mt-1 text-xs text-muted">
+                  Choose browser sign-in or an API key. Existing credentials appear
+                  here when available to the local host.
                 </p>
               </div>
             )}
-            <div className="provider-footer">
-              <button
-                className="primary-button"
-                disabled={busy}
-                onClick={() => navigate("catalog")}
-              >
+            <div className="flex flex-wrap items-center gap-2">
+              <Button disabled={busy} onClick={() => navigate("catalog")}>
                 Add provider
-              </button>
-              <button
-                className="text-button"
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
                 disabled={busy}
                 onClick={() =>
                   void action("/api/auth/refresh", {}, () =>
@@ -381,23 +366,25 @@ export function ProviderDialog({
                 }
               >
                 Refresh providers
-              </button>
+              </Button>
             </div>
           </>
         )}
 
         {view === "catalog" && (
           <>
-            <label className="sr-only" htmlFor="provider-search">
-              Search providers
-            </label>
-            <input
-              id="provider-search"
-              placeholder="Search providers"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <div className="provider-list catalog-list">
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 size-4 text-muted" />
+              <Input
+                id="provider-search"
+                aria-label="Search providers"
+                className="pl-9"
+                placeholder="Search providers"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <div className="grid max-h-72 gap-1 overflow-y-auto">
               {providers
                 .filter((item) =>
                   `${item.name || ""} ${item.id}`
@@ -406,21 +393,25 @@ export function ProviderDialog({
                 )
                 .map((item) => (
                   <button
-                    className="provider-row"
                     key={item.id}
+                    type="button"
+                    className="flex items-center gap-3 rounded-md p-3 text-left hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                     onClick={() => choose(item)}
                   >
-                    <span>
-                      <strong>{item.name || item.id}</strong>
-                      <small>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{item.name || item.id}</p>
+                      <p className="text-xs text-muted">
                         {item.authMethods
                           ?.map((option) => option.label)
                           .join(" · ") || "External configuration"}
-                      </small>
+                      </p>
+                    </div>
+                    <span className="text-xs text-accent">
+                      {item.authenticated ? "Connected" : ""}
                     </span>
-                    <span className="provider-connected">
-                      {item.authenticated ? "Connected" : "›"}
-                    </span>
+                    {!item.authenticated && (
+                      <ChevronRight className="size-4 text-muted" />
+                    )}
                   </button>
                 ))}
             </div>
@@ -428,25 +419,20 @@ export function ProviderDialog({
               `${item.name || ""} ${item.id}`
                 .toLowerCase()
                 .includes(search.toLowerCase()),
-            ) && <p>No matching providers.</p>}
-            <button
-              className="primary-button"
-              onClick={() => navigate("custom")}
-            >
-              Custom provider
-            </button>
+            ) && <p className="text-sm text-muted">No matching providers.</p>}
+            <Button onClick={() => navigate("custom")}>Custom provider</Button>
           </>
         )}
 
         {view === "custom" && (
-          <form onSubmit={saveCustom}>
-            <p>
+          <form className="grid gap-3" onSubmit={saveCustom}>
+            <p className="text-sm text-muted">
               Connect a local server or an OpenAI-compatible Chat Completions
               endpoint.
             </p>
-            <label htmlFor="custom-name">
-              Provider name
-              <input
+            <div className="grid gap-1.5">
+              <Label htmlFor="custom-name">Provider name</Label>
+              <Input
                 id="custom-name"
                 value={customName}
                 onChange={(event) => setCustomName(event.target.value)}
@@ -455,10 +441,10 @@ export function ProviderDialog({
                 required
                 disabled={busy}
               />
-            </label>
-            <label htmlFor="custom-url">
-              Base URL
-              <input
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="custom-url">Base URL</Label>
+              <Input
                 id="custom-url"
                 type="url"
                 value={baseUrl}
@@ -467,10 +453,10 @@ export function ProviderDialog({
                 required
                 disabled={busy}
               />
-            </label>
-            <label htmlFor="custom-models">
-              Model IDs
-              <textarea
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="custom-models">Model IDs</Label>
+              <Textarea
                 id="custom-models"
                 value={modelIds}
                 onChange={(event) => setModelIds(event.target.value)}
@@ -479,11 +465,8 @@ export function ProviderDialog({
                 disabled={busy}
                 rows={3}
               />
-            </label>
-            <p className="key-help">
-              Use the exact model IDs served by your endpoint.
-            </p>
-            <label className="checkbox-label">
+            </div>
+            <label className="flex items-center gap-2 text-xs text-ink-soft">
               <input
                 type="checkbox"
                 checked={noAuth}
@@ -496,9 +479,9 @@ export function ProviderDialog({
               This endpoint needs no authentication
             </label>
             {!noAuth && (
-              <label htmlFor="custom-key">
-                API key
-                <input
+              <div className="grid gap-1.5">
+                <Label htmlFor="custom-key">API key</Label>
+                <Input
                   id="custom-key"
                   type="password"
                   autoComplete="off"
@@ -508,45 +491,41 @@ export function ProviderDialog({
                   required
                   disabled={busy}
                 />
-              </label>
+              </div>
             )}
-            <p className="key-help">
-              Endpoint configuration and credentials are saved on your local
-              host.
-            </p>
-            <button className="primary-button" disabled={busy}>
+            <Button type="submit" disabled={busy}>
               {busy ? "Saving…" : "Save and continue"}
-            </button>
+            </Button>
           </form>
         )}
 
         {view === "success" && (
           <>
-            <div className="auth-notice" role="status">
+            <div
+              className="rounded-md border border-accent/20 bg-accent-soft px-3 py-2 text-sm text-accent"
+              role="status"
+            >
               {provider?.name || providerId} connected.
             </div>
             {modelPicker}
-            <button
-              className="text-button"
-              disabled={busy}
-              onClick={() => void close()}
-            >
+            <Button variant="ghost" disabled={busy} onClick={() => void close()}>
               Done
-            </button>
+            </Button>
           </>
         )}
 
         {view === "setup" && (
           <>
             {provider?.authenticated && (
-              <div className="connected-provider">
-                <span className="eyebrow">
-                  CONNECTED · {credentialDescription(provider)}
-                </span>
-                {modelPicker}
-                <div className="provider-footer">
-                  <button
-                    className="text-button"
+              <div className="rounded-md border border-line p-4">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted">
+                  Connected · {credentialDescription(provider)}
+                </p>
+                <div className="mt-3">{modelPicker}</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={busy}
                     onClick={() =>
                       void action(
@@ -557,10 +536,12 @@ export function ProviderDialog({
                     }
                   >
                     Refresh models
-                  </button>
+                  </Button>
                   {provider.canLogout && (
-                    <button
-                      className="text-button danger-text"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger"
                       disabled={busy}
                       onClick={() =>
                         void action(
@@ -571,17 +552,18 @@ export function ProviderDialog({
                       }
                     >
                       Remove saved credentials
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
             )}
-            <form onSubmit={login}>
+            <form className="grid gap-3" onSubmit={login}>
               {methods.length > 1 && (
-                <label htmlFor="provider-method">
-                  Sign-in method
+                <div className="grid gap-1.5">
+                  <Label htmlFor="provider-method">Sign-in method</Label>
                   <select
                     id="provider-method"
+                    className="flex h-8 w-full rounded-sm border border-line bg-surface px-2.5 text-[13px]"
                     value={method}
                     disabled={busy}
                     onChange={(event) => {
@@ -596,13 +578,13 @@ export function ProviderDialog({
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               )}
               {method === "api_key" &&
                 methods.some((item) => item.type === "api_key") && (
-                  <label htmlFor="provider-key">
-                    API key
-                    <input
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="provider-key">API key</Label>
+                    <Input
                       id="provider-key"
                       type="password"
                       autoComplete="off"
@@ -612,43 +594,38 @@ export function ProviderDialog({
                       onChange={(event) => setKey(event.target.value)}
                       placeholder="Paste a key, or continue for guided setup"
                     />
-                  </label>
+                  </div>
                 )}
               {methods.length ? (
                 <>
-                  <p className="key-help">
+                  <p className="text-xs text-muted">
                     Credentials are managed by Pi on your local host and reused
                     across Revit sessions. Keys and sign-in responses are never
                     saved in browser storage.
                   </p>
-                  <button
-                    type="submit"
-                    className="primary-button"
-                    disabled={busy}
-                  >
+                  <Button type="submit" disabled={busy}>
                     {busy
                       ? "Connecting…"
                       : method === "oauth"
                         ? `Sign in with ${provider?.name || providerId}`
                         : "Save and continue"}
-                  </button>
+                  </Button>
                 </>
               ) : (
                 <>
-                  <p>
+                  <p className="text-sm text-muted">
                     This provider uses external configuration. Configure its
                     credentials in the host environment, then refresh providers.
                   </p>
-                  <button
+                  <Button
                     type="button"
-                    className="primary-button"
                     disabled={busy}
                     onClick={() =>
                       void action("/api/auth/refresh", { provider: providerId })
                     }
                   >
                     Check again
-                  </button>
+                  </Button>
                 </>
               )}
             </form>
@@ -656,15 +633,20 @@ export function ProviderDialog({
         )}
 
         {activeAuth?.busy && (
-          <div className="auth-notice" role="status">
+          <div
+            className="rounded-md border border-accent/20 bg-accent-soft px-3 py-2 text-sm text-accent"
+            role="status"
+          >
             <p>
               {activeAuth.notice ||
                 "Complete the provider sign-in to continue."}
             </p>
             {activeAuth.userCode && (
-              <div className="device-code">
-                <span>Device code</span>
-                <code>{activeAuth.userCode}</code>
+              <div className="mt-2">
+                <span className="text-[10px] uppercase tracking-wider">Device code</span>
+                <code className="mt-1 block text-lg tracking-widest">
+                  {activeAuth.userCode}
+                </code>
               </div>
             )}
             {url && (
@@ -672,7 +654,7 @@ export function ProviderDialog({
                 href={url}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="auth-link"
+                className="mt-2 inline-block text-sm underline underline-offset-2"
               >
                 Open sign-in ↗
               </a>
@@ -681,7 +663,7 @@ export function ProviderDialog({
         )}
         {activeAuth?.busy && activeAuth.request && (
           <form
-            className="auth-response"
+            className="grid gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               const value = answer;
@@ -692,67 +674,64 @@ export function ProviderDialog({
               });
             }}
           >
-            <label htmlFor="auth-response">
-              {activeAuth.request.prompt}
-              {activeAuth.request.type === "select" ? (
-                <select
-                  id="auth-response"
-                  value={answer}
-                  onChange={(event) => setAnswer(event.target.value)}
-                  disabled={pending}
-                  required
-                >
-                  <option value="">Select an option</option>
-                  {activeAuth.request.options?.map((option) => (
-                    <option value={option.id} key={option.id}>
-                      {option.label}
-                      {option.description ? ` — ${option.description}` : ""}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  id="auth-response"
-                  type={
-                    activeAuth.request.password ||
-                    activeAuth.request.type === "secret"
-                      ? "password"
-                      : "text"
-                  }
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder={
-                    activeAuth.request.placeholder || "Paste your response"
-                  }
-                  value={answer}
-                  onChange={(event) => setAnswer(event.target.value)}
-                  disabled={pending}
-                  required
-                />
-              )}
-            </label>
-            <button
-              className="primary-button"
-              disabled={pending || !answer.trim()}
-            >
+            <Label htmlFor="auth-response">{activeAuth.request.prompt}</Label>
+            {activeAuth.request.type === "select" ? (
+              <select
+                id="auth-response"
+                aria-label={activeAuth.request.prompt}
+                className="flex h-8 w-full rounded-sm border border-line bg-surface px-2.5 text-[13px]"
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                disabled={pending}
+                required
+              >
+                <option value="">Select an option</option>
+                {activeAuth.request.options?.map((option) => (
+                  <option value={option.id} key={option.id}>
+                    {option.label}
+                    {option.description ? ` — ${option.description}` : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                id="auth-response"
+                aria-label={activeAuth.request.prompt}
+                type={
+                  activeAuth.request.password ||
+                  activeAuth.request.type === "secret"
+                    ? "password"
+                    : "text"
+                }
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={
+                  activeAuth.request.placeholder || "Paste your response"
+                }
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                disabled={pending}
+                required
+              />
+            )}
+            <Button type="submit" disabled={pending || !answer.trim()}>
               Continue sign-in
-            </button>
+            </Button>
           </form>
         )}
         {notice && (
-          <p role="status" className="settings-message">
+          <p role="status" className="rounded-md bg-surface-muted px-3 py-2 text-sm text-ink-soft">
             {notice}
           </p>
         )}
         {(error || activeAuth?.error) && (
-          <p role="alert" className="auth-error">
+          <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
             {error || activeAuth?.error}
           </p>
         )}
         {auth?.busy && (
-          <button
-            type="button"
-            className="stop-button cancel-setup"
+          <Button
+            variant="destructive"
             disabled={pending}
             onClick={() => {
               submitted.current = false;
@@ -763,9 +742,15 @@ export function ProviderDialog({
             }}
           >
             Cancel setup
-          </button>
+          </Button>
         )}
-      </dialog>
-    </div>
+        {busy && (
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Loader2 className="size-3.5 animate-spin" />
+            Working…
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
