@@ -3,11 +3,13 @@ export interface Context {
   document: null | { token: string; title: string; isFamily: boolean; isReadOnly: boolean; activeView: string; selection: string[] };
   documents?: NonNullable<Context['document']>[];
 }
-export interface ExecuteInput { code: string; usings?: string[]; mode: 'query' | 'modify' | 'api'; documentToken?: string | null; transactionName?: string }
-export interface Operation extends ExecuteInput {
+export interface Snippet { code: string; usings?: string[] }
+export interface BatchStep extends Snippet { name: string }
+export type ExecuteInput = (Snippet & { mode: 'query' | 'modify' | 'api'; documentToken?: string | null; steps?: never; verify?: never } | { mode: 'batch'; documentToken: string; steps: BatchStep[]; verify?: Snippet; code?: never; usings?: never }) & { transactionName?: string };
+export type Operation = Omit<ExecuteInput, 'documentToken'> & {
   operationId: string; documentToken: string | null; createdAt: string; status: string;
   result?: unknown; logs?: string[]; diagnostics?: unknown[]; error?: string; transactionStatus?: string; elapsedMs?: number;
-}
+};
 export interface Settings { provider: string; model: string; configured: boolean }
 export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string }
 export interface ProviderSummary { id: string; name?: string; models: { id: string; name: string }[]; authenticated?: boolean; authMethods?: { type: 'api_key' | 'oauth'; label: string }[]; credentialSource?: string; credentialLabel?: string; canLogout?: boolean }

@@ -100,6 +100,29 @@ return new { id = family.UniqueId, name = family.Name };
 
 For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` can show Revit's conflict prompts. Edit family geometry beforehand in a separate modify call targeted to the family, then verify the loaded family with a query targeted to the project.
 
+## Atomic edit batches
+
+Use `batch` mode when several edits to **one document** must succeed together. Inspect first, prepare all named steps, and submit one request with an explicit `documentToken`. The console has a batch step editor; the agent uses the same `revit_execute_csharp` tool.
+
+```json
+{
+  "mode": "batch",
+  "documentToken": "<open document token>",
+  "transactionName": "Create and name a level",
+  "steps": [
+    { "name": "Create", "code": "var level = Level.Create(ctx.Doc, 15); return new { id = level.UniqueId };" },
+    { "name": "Name", "code": "var level = ctx.Doc.GetElement(ctx.StepResults[0].GetProperty(\"id\").GetString()); level.Name = \"Batch level\"; return level.UniqueId;" }
+  ],
+  "verify": { "code": "return ctx.Doc.GetElement(ctx.StepResults[0].GetProperty(\"id\").GetString()).Name == \"Batch level\";" }
+}
+```
+
+All steps and optional verification compile before editing. Each step owns an inner transaction within one synchronous transaction group. Verification runs without a transaction and must return exactly `true`; omission means no extra acceptance check. Confirmed success assimilates the group into one Undo entry. An exception, invalid result, failed verification or cooperative cancellation rolls back the group; uncertain cleanup reports `unknown` and blocks further execution.
+
+`ctx.StepResults` contains earlier materialized `System.Text.Json.JsonElement` results, available only within the batch. Limits are 1–20 steps, 64 KiB combined source/imports, 256 KiB aggregate result payload (with space reserved for receipts), and 100 log lines/16,000 characters. History distinguishes `committed`, `rolledBack`, `notRun`, and `unknown` steps. Rolled-back element results are discarded.
+
+This guarantee covers transaction-backed edits to the target during normal execution. It does not cover crashes, other documents, save/sync/export, document lifecycle, family loading, or filesystem/network effects. Recognized unsupported calls are rejected by the compiler; arbitrary C# remains full trust. Never retry individual steps or automatically replay an uncertain batch. See [validation and remaining acceptance checks](docs/TESTING.md).
+
 ## Architecture
 
 ```text

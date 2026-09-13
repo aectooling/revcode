@@ -14,7 +14,7 @@ internal sealed record ExecutionOutcome(string Status, JsonElement? Result, stri
 internal static class ScriptExecutor
 {
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static ExecutionOutcome Execute(UIApplication app, Document? document, Func<Document, string> documentToken, string mode, string? transactionName, byte[] assembly, byte[]? pdb, CancellationToken cancellation)
+    public static ExecutionOutcome Execute(UIApplication app, Document? document, Func<Document, string> documentToken, string mode, string? transactionName, byte[] assembly, byte[]? pdb, CancellationToken cancellation, IReadOnlyList<JsonElement>? stepResults = null)
     {
         var loadContext = new SnippetLoadContext();
         Transaction? transaction = null;
@@ -42,7 +42,7 @@ internal static class ScriptExecutor
                 if (logs.Count >= 100 || logChars >= 16000) return;
                 var line = text[..Math.Min(text.Length, Math.Min(2000, 16000 - logChars))];
                 logs.Add(line); logChars += line.Length;
-            });
+            }, stepResults);
             scriptStarted = true;
             var value = script.Execute(context);
             cancellation.ThrowIfCancellationRequested();

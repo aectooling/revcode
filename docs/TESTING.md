@@ -26,6 +26,27 @@ Revit 2025 and 2027 compile against their installed API assemblies; they have no
 
 ## Repeat the disposable-project check
 
+### Atomic batches (2026-09-13)
+
+Validated through the packaged host, compiler worker and native bridge in **Revit 2026.3 build 26.3.0.37, .NET 8.0.31**, using a new disposable project:
+
+- A compiler error in step 2 returned a step-scoped diagnostic and executed nothing.
+- Step 2 exceptions and unsupported Revit-object results rolled back the group, including step 1's already-committed inner transaction.
+- Verification returning false or a string rolled back both steps.
+- An `OperationCanceledException`, and separately cancellation sent through the host while a cooperative batch was running, confirmed group rollback.
+- Successful steps passed a created element's UniqueId through `ctx.StepResults`, renamed it, and passed read-only verification.
+- One normal Revit Undo (posted through `PostableCommand.Undo`) removed both creation and rename. Queries after each failure/Undo confirmed no test elements remained.
+
+Repeat with the same disposable-project hook described below:
+
+```powershell
+node scripts/smoke-batch-revit.mjs '<instance-dir>\discovery.json' '<test-dir>\smoke-project.txt' '<test-dir>\batch-results.json'
+```
+
+Automated coverage includes request limits, whole-batch journaling/deduplication, agent dispatch, unknown-outcome fencing, compiler restrictions, and the actual group coordinator with API doubles for rollback, verification, aggregate overflow and pending/failed cleanup. The production browser test submits a three-step batch, displays rolled-back/unexecuted receipts, and verifies reload does not replay it. API doubles do not establish actual Revit failure-processing semantics.
+
+The 2025 and 2027 add-ins compile; batch behavior has only received live validation on the 2026.3 build above. Additional live coverage remains for inactive/read-only/closed targets, tab switches during compilation, disconnect during a batch, real Revit pending failure processing, and other runtime/build profiles. Existing target/reconnect tests cover the shared paths with simulated peers. Real provider generation of a batch has not been exercised; agent dispatch uses a local fixture.
+
 The native test hook is opt-in and refuses an existing active document. Set `REVCODE_SMOKE_DIR` to an absolute test output directory and optionally `REVCODE_NO_BROWSER=1` only in the environment of a newly launched Revit process. On its first Idling callback, the add-in creates, saves, and opens a new uniquely named project, then writes `smoke-project.txt`. It never targets an existing user project.
 
 ```powershell

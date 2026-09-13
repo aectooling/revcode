@@ -134,6 +134,8 @@ function App() {
   const [hostOnline, setHostOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [steps, setSteps] = useState([{ name: "Step 1", code: "return null;" }]);
+  const [verify, setVerify] = useState("");
   const [code, setCode] = useState(examples[0].code);
   const [mode, setMode] = useState<Mode>("query");
   const [documentToken, setDocumentToken] = useState("");
@@ -220,7 +222,7 @@ function App() {
   );
   const canExecute = ready && !busy && !unknown;
   const canRunSnippet = canExecute && (!documentToken || !!targetDocument)
-    && (mode !== "modify" || (!!targetDocument && !targetDocument.isReadOnly));
+    && ((mode !== "modify" && mode !== "batch") || (!!targetDocument && !targetDocument.isReadOnly));
   const operations = [...(state?.operations ?? [])].reverse();
   const providerName = providerLabel(state?.settings.provider, state?.providers ?? []);
   const connectionDetail = !hostOnline ? connectionError : "";
@@ -265,9 +267,7 @@ function App() {
     try {
       await api("/api/execute", {
         requestId: crypto.randomUUID(),
-        code,
-        mode,
-        ...(documentToken ? { documentToken } : {}),
+        ...(mode === "batch" ? { mode, steps, ...(verify.trim() ? { verify: { code: verify } } : {}), documentToken: targetDocument?.token } : { code, mode, ...(documentToken ? { documentToken } : {}) }),
         transactionName: "Revcode: C# console",
       });
       await refreshState();
@@ -451,6 +451,7 @@ function App() {
                 </DialogDescription>
               </DialogHeader>
               <ConsolePanel
+                steps={steps} onStepsChange={setSteps} verify={verify} onVerifyChange={setVerify}
                 code={code}
                 onCodeChange={setCode}
                 mode={mode}

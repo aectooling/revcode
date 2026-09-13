@@ -38,6 +38,16 @@ public sealed class CompilerTests : IDisposable
         Assert.DoesNotContain(result.Diagnostics, x => x.Severity == "error");
     }
 
+    [Theory]
+    [InlineData("batch")]
+    [InlineData("verify")]
+    public void BatchContractsRejectKnownExternalEffects(string mode)
+    {
+        Assert.NotNull(SnippetCompiler.Compile(new("return true;", null, references, mode)).Assembly);
+        foreach (var code in new[] { "ctx.Doc.Save(); return true;", "ctx.Doc.LoadFamily(\"family.rfa\"); return true;", "System.IO.File.WriteAllText(\"test\", \"data\"); return true;", "return System.Net.Dns.GetHostName();" })
+            Assert.Null(SnippetCompiler.Compile(new(code, null, references, mode)).Assembly);
+    }
+
     [Fact]
     public void ErrorsMapToSnippetLine()
     {

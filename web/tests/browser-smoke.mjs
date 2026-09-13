@@ -150,6 +150,10 @@ const nativeLoop = (async () => {
         operationId: command.operationId,
         status: "running",
       });
+      if (command.mode === "batch") {
+        await send("operation", { operationId: command.operationId, status: "failed", transactionStatus: "RolledBack", result: { steps: command.steps.map((step, i) => ({ name: step.name, status: i < 2 ? "rolledBack" : "notRun" })) } });
+        continue;
+      }
       if (command.code.includes("HOLD_FOR_CANCEL")) {
         heldOperation = command.operationId;
         continue;
@@ -372,6 +376,25 @@ try {
     page.getByText("Revit connected", { exact: true }),
   ).toBeVisible();
   expect(commandCount).toBe(4);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator(".console-button").click();
+  await page.getByLabel("Execution mode").selectOption("batch");
+  await page.getByLabel("Step 1 name", { exact: true }).fill("Create batch element");
+  await page.getByLabel("Step 1 C#", { exact: true }).fill("return 1;");
+  await page.getByRole("button", { name: "Add step", exact: true }).click();
+  await page.getByLabel("Step 2 C#", { exact: true }).fill("throw new Exception();");
+  await page.getByRole("button", { name: "Add step", exact: true }).click();
+  await page.getByLabel("Batch verification", { exact: true }).fill("return true;");
+  await page.getByRole("button", { name: "Run C#", exact: true }).click();
+  await expect.poll(() => commandCount).toBe(5);
+  expect(lastCommand).toMatchObject({ mode: "batch", documentToken: context.document.token, verify: { code: "return true;" } });
+  expect(lastCommand.steps).toHaveLength(3);
+  await expect(page.getByText("1. Create batch element · rolledBack", { exact: true })).toBeVisible();
+  await expect(page.getByText("3. Step 3 · notRun", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("1. Create batch element · rolledBack", { exact: true })).toBeVisible();
+  expect(commandCount).toBe(5);
 
   const unauthorized = await browser.newPage();
   await unauthorized.goto(`${host.url}/#invalid-token`);

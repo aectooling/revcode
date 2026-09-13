@@ -15,7 +15,7 @@ public static class SnippetCompiler
 {
     public static CompileResponse Compile(CompileRequest request)
     {
-        if (request.Mode is not ("query" or "modify" or "api")) return Error("Mode must be query, modify or api.");
+        if (request.Mode is not ("query" or "modify" or "api" or "batch" or "verify")) return Error("Mode must be query, modify, api, batch or verify.");
         if (string.IsNullOrWhiteSpace(request.Code) || Encoding.UTF8.GetByteCount(request.Code) > 65536)
             return Error("Provide a nonempty C# method body of at most 64 KiB.");
         var namespaces = new[] { "System", "System.Linq", "System.Collections.Generic", "Autodesk.Revit.DB", "Autodesk.Revit.UI", "Revcode.Contracts" }
@@ -57,6 +57,18 @@ public static class SnippetCompiler
                 violation = "Use api mode for document lifecycle, export and document-to-document family loading operations.";
             if (owner?.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal) == true || owner is "System.Threading.Thread" or "System.Diagnostics.Process")
                 violation = "Background tasks, threads and process launches are unsupported in snippets.";
+            if (request.Mode is "batch" or "verify")
+            {
+                if (owner?.StartsWith("System.IO.", StringComparison.Ordinal) == true
+                    || owner?.StartsWith("System.Net.", StringComparison.Ordinal) == true
+                    || owner == "System.Environment"
+                    || owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "LoadFamily" or "LoadFamilySymbol"
+                    || owner == "Revcode.Contracts.RevcodeContext" && symbol?.Name == "GetDocument")
+                    violation = "Batches permit only transaction-backed edits to ctx.Doc; external effects and other-document access are unsupported.";
+                if (node is MemberAccessExpressionSyntax member && model.GetSymbolInfo(member).Symbol is IPropertySymbol property
+                    && property.ContainingType.ToDisplayString() == "Revcode.Contracts.RevcodeContext" && property.Name is "UiApp" or "UiDoc" or "Documents")
+                    violation = "Use ctx.Doc in batches; UI and other-document access are unsupported.";
+            }
             if (violation != null)
             {
                 var span = node.GetLocation().GetMappedLineSpan();

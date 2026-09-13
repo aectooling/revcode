@@ -9,8 +9,9 @@ public interface IRevcodeScript
 }
 
 /// <summary>Valid only during the synchronous Execute callback. Never retain Revit objects.</summary>
-public sealed class RevcodeContext(UIApplication uiApp, Document? document, Func<Document, string> documentToken, CancellationToken cancellation, Action<string> logger)
+public sealed class RevcodeContext(UIApplication uiApp, Document? document, Func<Document, string> documentToken, CancellationToken cancellation, Action<string> logger, IReadOnlyList<System.Text.Json.JsonElement>? stepResults = null)
 {
+    public IReadOnlyList<System.Text.Json.JsonElement> StepResults => stepResults ?? throw new InvalidOperationException("StepResults is available only in batches.");
     public UIApplication UiApp { get; } = uiApp;
     public UIDocument UiDoc => UiApp.ActiveUIDocument ?? throw new InvalidOperationException("No active UI document.");
     public Document Doc => document ?? throw new InvalidOperationException("No target document. Open or create a document in api mode first.");

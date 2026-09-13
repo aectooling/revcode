@@ -1,5 +1,25 @@
 # MVP integration contract
 
+## Atomic batch extension
+
+Browser `POST /api/execute` and `revit_execute_csharp` accept a discriminated request:
+
+```typescript
+{ mode: "batch", documentToken: string, transactionName?: string,
+  steps: { name: string, code: string, usings?: string[] }[],
+  verify?: { code: string, usings?: string[] } }
+```
+
+Browser requests additionally require `requestId`. Top-level `code`/`usings` are rejected for batches; steps/verification are rejected for single-snippet modes. Require 1–20 steps, names of 1–100 characters, and at most 64 KiB UTF-8 combined code/imports including verification. The complete normalized batch is journaled as one operation, then forwarded unchanged with native `kind: "execute"` and `operationId`. Deduplication fingerprints include every step and verification; no per-step replay is supported.
+
+Native validates the target again, compiles all snippets before scheduling one callback, and attaches zero-based `stepIndex` and `stepName` to diagnostics (`verification` uses index `steps.length`). Compilation failure reports `NotStarted`. Internal compiler modes `batch` and `verify` add contract restrictions to existing synchronous execution checks.
+
+The terminal `result` is `{steps: [{name, status, result?, error?}], verificationStatus: null | "notRun" | "running" | "passed" | "failed"}`. Step status is `committed` only after confirmed assimilation, `rolledBack` after confirmed group rollback, `notRun` if execution never reached it, or `unknown` if cleanup was unconfirmed. On rollback/unknown, per-step result values are removed. Compilation/target failures may have no result envelope; compilation diagnostics identify the failing snippet. Overall `transactionStatus` describes the group. A passed verification is an observation before group finalization, not independent evidence of commitment.
+
+Aggregate results are checked before assimilation; 240 KiB is reserved for materialized step values within the 256 KiB final result budget. Logs are bounded to 100 lines and 16,000 characters across all steps and verification. An unknown native group outcome fences the process; disconnect recovery uses the existing retained operation receipt.
+
+## Existing transport and single-snippet contract
+
 One hidden Node host per Revit process; browser loopback HTTP and mandatory native ZeroMQ bridge, with separate browser and native tokens. All JSON uses camelCase. Browser is React/Vite, built to `dist/web`; host TypeScript compiled to `dist/host/index.js`. Package root contains `runtime.json`: `{ "nodePath": "runtime/node.exe", "hostPath": "dist/host/index.js", "compilerPath": "compiler/Revcode.Compiler.exe" }` (paths relative to package root). Add-in lives in `addin/<year>/Revcode.Revit.dll`; find runtime.json by walking up from assembly directory.
 
 Native launches Node hidden with arguments `hostPath --instance <uuid> --parent-pid <pid> --discovery <absolute-json-path> --data-dir <absolute-instance-data-dir> --user-dir <absolute-private-user-dir>`. Native token is passed in child environment `REVCODE_NATIVE_TOKEN`, never logged. Node atomically writes discovery `{ protocolVersion: 1, instanceId, url, browserToken, nativeEndpoint }`, user-only ACL inherited from private data directory. Native opens `url/#browserToken`. Browser removes fragment and remembers token in sessionStorage, attaches `Authorization: Bearer TOKEN` to API fetch requests. No query-string tokens. Host validates Host and Origin; accepts only loopback local clients. Native sets Windows user-only ACLs on both instance and shared user directories. Shared user directory retains model definitions and selection across launches; credentials use the shared Pi auth file (or REVCODE_PI_AUTH_PATH), and the instance directory retains its transcript/journal.

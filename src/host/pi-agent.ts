@@ -15,8 +15,9 @@ Use query mode to inspect; modify mode for ordinary edits in ctx.Doc, including 
 Use api mode for APIs that manage their own transactions or require no open transaction: familyDocument.LoadFamily(targetDocument), EditFamily, opening/creating documents, saving, syncing, closing and exporting. This mode opens NO wrapper transaction; use only for operations needed by the user's task and verify their results. For family loading, inspect both documents, call ctx.GetDocument(familyToken).LoadFamily(ctx.Doc) with the project as documentToken, return the loaded family's UniqueId, and query the project afterward. For reload conflicts use the overload with new RevitUIFamilyLoadOptions() if appropriate. Do ordinary family geometry edits in a separate modify call before loading. Revit's own API restrictions still apply.
 When no document is open, query and api modes are available with documentToken: null; ctx.Doc then throws, but ctx.UiApp and ctx.Documents remain available. You may use synchronous filesystem access for task-related data and exports. Do not launch processes or start threads/tasks. Keep code short and check cancellation in loops.
 Return materialized JSON-safe values/arrays (not Revit objects or lazy collections), with element UniqueIds. Use UnitUtils for unit conversion. Inspect before editing and query afterward to verify.
+For edits that must succeed together, inspect first and submit one batch with explicit documentToken, 1-20 named steps ({name, code, usings?}), and optional verify ({code, usings?}) returning exactly true. All snippets compile before execution. A single document transaction group rolls back all steps on failure and assimilates success into one Undo entry. ctx.StepResults is an IReadOnlyList<System.Text.Json.JsonElement> of prior materialized results: use ctx.StepResults[0].GetProperty("id").GetString() to resolve a created element. No save/sync/export, file/network effects, other-document edits or lifecycle calls in batches. Rolled-back results are diagnostic only. Never retry individual steps or unknown batches.
 Each successful modify call creates a Revit Undo entry. Failed or cancelled modify calls normally roll back. API mode has no whole-call rollback or single-Undo guarantee; a failure after execution starts is unknown because earlier effects may persist. An unknown outcome must never be retried; explain that the user must inspect Revit.
-If C# compilation fails, use diagnostics to correct it. Do not claim edits succeeded unless status is succeeded and transactionStatus is Committed (modify) or ApiManaged (api). Check API return values; a false return can mean the requested action did not happen.
+If C# compilation fails, use diagnostics to correct it. Do not claim edits succeeded unless status is succeeded and transactionStatus is Committed (modify/batch) or ApiManaged (api). Check API return values; a false return can mean the requested action did not happen.
 Example query: return new FilteredElementCollector(ctx.Doc).OfClass(typeof(Level)).Cast<Level>().Select(x => new { id = x.UniqueId, name = x.Name }).ToArray();`;
 
 export async function createPiAgent(dataDir: string, userDir = dataDir, configureRuntime?: (runtime: ModelRuntime) => void, authPath = resolve(userDir, 'auth.json')): Promise<Agent> {
@@ -68,8 +69,15 @@ export async function createPiAgent(dataDir: string, userDir = dataDir, configur
       await loader.reload();
       const { session } = await createAgentSession({ cwd: agentDir, agentDir, model, modelRuntime: runtime, thinkingLevel: 'low', settingsManager,
         resourceLoader: loader, tools: ['revit_execute_csharp'], noTools: 'builtin', sessionManager: SessionManager.create(agentDir, resolve(agentDir, 'sessions')),
-        customTools: [{ name: 'revit_execute_csharp', label: 'Execute Revit C#', description: 'Execute C# in the current Revit session. Target any open document by documentToken. Query inspects; modify owns a transaction on the target; api runs document lifecycle and family-loading APIs without a wrapper transaction.',
-          parameters: Type.Object({ code: Type.String(), mode: Type.Union([Type.Literal('query'), Type.Literal('modify'), Type.Literal('api')]), documentToken: Type.Optional(Type.Union([Type.String(), Type.Null()])), usings: Type.Optional(Type.Array(Type.String())), transactionName: Type.Optional(Type.String()) }),
+        customTools: [{ name: 'revit_execute_csharp', label: 'Execute Revit C#', description: 'Execute C# in the current Revit session. Target any open document by documentToken. Query inspects; modify owns a transaction on the target; api runs document lifecycle and family-loading APIs without a wrapper transaction; batch runs 1-20 named steps atomically on one explicit document with optional boolean verification.',
+          parameters: Type.Object({
+            mode: Type.Union([Type.Literal('query'), Type.Literal('modify'), Type.Literal('api'), Type.Literal('batch')]),
+            documentToken: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            transactionName: Type.Optional(Type.String()),
+            code: Type.Optional(Type.String()), usings: Type.Optional(Type.Array(Type.String())),
+            steps: Type.Optional(Type.Array(Type.Object({ name: Type.String(), code: Type.String(), usings: Type.Optional(Type.Array(Type.String())) }), { minItems: 1, maxItems: 20 })),
+            verify: Type.Optional(Type.Object({ code: Type.String(), usings: Type.Optional(Type.Array(Type.String())) })),
+          }),
           execute: async (_id, input, signal) => {
             const result = await execute(input as ExecuteInput, signal);
             return { content: [{ type: 'text', text: JSON.stringify(result) }], details: result };
