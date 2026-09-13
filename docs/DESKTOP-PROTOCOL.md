@@ -1,5 +1,15 @@
 # Desktop helper spike protocol
 
+## Background focus correction
+
+A persistent helper can lose foreground permission after the user works in chat. If its direct request is refused, it temporarily registers an unassigned virtual-key hotkey (0xB9), dispatches a tracked press/release to that registration, processes the hotkey, and requests Revit focus again. This follows Microsoft's [UI Automation focus implementation](https://raw.githubusercontent.com/dotnet/wpf/main/src/Microsoft.DotNet.Wpf/src/UIAutomation/UIAutomationClientSideProviders/MS/Internal/AutomationProxies/Misc.cs). Held human input is rejected; Stop and partial-insertion handling use the same policy as other input. The start response reports `focusMethod` (`already-foreground`, `direct`, or `registered-hotkey`).
+
+The helper caches the largest visible unowned Revit window without TOOLWINDOW/NOACTIVATE styles at construction. This is a root-selection heuristic; it stops if the cached HWND loses its bound PID. Repeatedly using `Process.MainWindowHandle` was observed selecting a tooltip after a ViewCube click. Auxiliary windows are excluded from control targets and window-change signatures. Popup mouse targeting remains conservative; keyboard navigation can operate menus while their owning Revit window retains focus.
+
+Live validation on 2026-09-14 exercised the same helper across turns: after foreground input in T3 chat, the `registered-hotkey` fallback returned an actionable Revit screenshot. A production DesktopController/DesktopClient harness used clicks and keyboard menu navigation to change the open model's 3D view to Top and Wireframe, then visually verified the result. No model geometry or API mutation was performed. The installed chat process still had its old helper loaded; a complete model-driven chat retest requires reloading the rebuilt package.
+
+Use `--repeat` with `scripts/smoke-desktop-focus.mjs` to check a second turn with the same helper, switching to chat during the five-second pause. A fresh-helper-only smoke is insufficient to verify background focus permission.
+
 The helper is now bundled and launched on demand by the host, with `revit_ui_observe` and `revit_ui_action` registered in Pi. The integration is experimental; live Revit acceptance remains pending. No Revit API assemblies or automation framework are loaded in the helper. The standalone driver below remains available for isolated manual checks.
 
 ## Host and agent integration

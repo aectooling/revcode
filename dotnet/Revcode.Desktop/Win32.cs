@@ -16,6 +16,9 @@ internal static class Win32
     internal const uint KeyboardInput = 1, ExtendedKey = 1, KeyUp = 2, UnicodeKey = 4;
     internal const uint HotkeyControlAltNoRepeat = 0x0001 | 0x0002 | 0x4000;
     internal const uint KeyF12 = 0x7B;
+    // Unassigned virtual key used by Microsoft's UI Automation focus handoff.
+    internal const ushort FocusKey = 0xB9;
+    internal const int FocusHotkeyId = 2;
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; public readonly Bounds Bounds => new(Left, Top, Right - Left, Bottom - Top); }
     [StructLayout(LayoutKind.Sequential)] internal struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct Mouse { public int X, Y; public uint Data, Flags, Time; public nuint Extra; }
@@ -35,6 +38,7 @@ internal static class Win32
     [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(nint window);
     [DllImport("user32.dll")] internal static extern bool ShowWindowAsync(nint window, int command);
     [DllImport("user32.dll")] internal static extern nint GetLastActivePopup(nint window);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint window, int index);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(nint window);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);
@@ -74,6 +78,22 @@ internal static class Win32
         if (desktop == 0) return false;
         try { return OnInputDesktop(DesktopName(GetThreadDesktop(GetCurrentThreadId())), DesktopName(desktop)); }
         finally { CloseDesktop(desktop); }
+    }
+
+    internal static bool ControlWindowStyle(long extendedStyle) => (extendedStyle & (0x80L | 0x08000000L)) == 0; // TOOLWINDOW / NOACTIVATE
+    internal static bool ControlWindow(nint window) => ControlWindowStyle(GetWindowLongPtr(window, -20).ToInt64());
+
+    internal static nint MainWindow(int pid)
+    {
+        nint main = 0; long area = 0;
+        EnumWindows((window, _) =>
+        {
+            if (Pid(window) != pid || !IsWindowVisible(window) || GetWindow(window, WindowOwner) != 0 || !ControlWindow(window)) return true;
+            var bounds = Geometry(window); var size = (long)bounds.Width * bounds.Height;
+            if (size > area) { main = window; area = size; }
+            return true;
+        }, 0);
+        return main;
     }
 
     // WTS queries fail when Remote Desktop Services is stopped. Only an attached

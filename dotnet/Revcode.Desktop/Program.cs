@@ -17,6 +17,7 @@ internal static class Program
             using var pump = new Pump(); _ = pump.Handle;
             using var session = new DesktopSession(int.Parse(args[0]), long.Parse(args[1]), int.Parse(args[2]), long.Parse(args[3]), args.Length == 5, pump.Handle);
             pump.Stop = session.Stop;
+            pump.FocusHotkey = session.FocusHotkey;
             var output = Channel.CreateBounded<string>(8);
             var writer = Task.Run(async () =>
             {
@@ -77,9 +78,11 @@ internal static class Program
     private sealed class Pump : Control
     {
         public Action? Stop;
+        public Action? FocusHotkey;
         protected override void WndProc(ref System.Windows.Forms.Message message)
         {
             if (message.Msg == 0x0312 && message.WParam == 1) Stop?.Invoke();
+            if (message.Msg == 0x0312 && message.WParam == Win32.FocusHotkeyId) FocusHotkey?.Invoke();
             base.WndProc(ref message);
         }
     }

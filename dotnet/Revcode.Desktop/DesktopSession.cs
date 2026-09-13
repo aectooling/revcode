@@ -22,6 +22,7 @@ internal sealed class DesktopSession : IDisposable
         ["A"] = 65, ["F"] = 70,
     };
     private readonly Process target, parent;
+    private readonly nint mainWindow;
     private readonly long targetStart, parentStart;
     private readonly bool inputEnabled;
     private readonly Mutex lease;
@@ -31,6 +32,8 @@ internal sealed class DesktopSession : IDisposable
     private readonly Stopwatch frameAge = Stopwatch.StartNew();
     private readonly HashSet<(ushort Key, bool Unicode)> heldKeys = new();
     private bool heldButton, owned, hotkey;
+    private bool focusHotkey, focusHotkeyReceived;
+    private string focusMethod = "already-foreground";
     private readonly InputPolicy policy = new();
     private Observation? observation;
     private nint observationWindow;
@@ -39,6 +42,7 @@ internal sealed class DesktopSession : IDisposable
     private readonly nint messageWindow;
     public string Generation { get; } = Guid.NewGuid().ToString("N");
     public void RequestStop() => policy.Stop();
+    public void FocusHotkey() { if (focusHotkey) focusHotkeyReceived = true; }
     private bool LeaseReady => policy.LeaseReady(owned, heartbeat.Elapsed, inactivity.Elapsed);
     private bool Interference => Win32.GetForegroundWindow() != observationWindow ||
         !Win32.GetCursorPos(out var point) || point.X != cursor.X || point.Y != cursor.Y || HumanHeldInput();
@@ -48,6 +52,8 @@ internal sealed class DesktopSession : IDisposable
         target = Process.GetProcessById(targetPid); parent = Process.GetProcessById(parentPid);
         targetStart = startTicks; parentStart = parentTicks; inputEnabled = enableInput; this.messageWindow = messageWindow;
         if (!string.Equals(target.ProcessName, "Revit", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Target must be Revit.");
+        mainWindow = Win32.MainWindow(targetPid);
+        if (mainWindow == 0) throw new InvalidOperationException("No visible Revit main window.");
         CheckIdentity();
         using var identity = WindowsIdentity.GetCurrent();
         lease = new Mutex(false, $@"Local\Revcode.Desktop.{identity.User!.Value}.{target.SessionId}");
@@ -55,7 +61,7 @@ internal sealed class DesktopSession : IDisposable
 
     private void CheckIdentity()
     {
-        if (target.HasExited || parent.HasExited || target.StartTime.ToUniversalTime().Ticks != targetStart || parent.StartTime.ToUniversalTime().Ticks != parentStart || target.SessionId != Process.GetCurrentProcess().SessionId)
+        if (target.HasExited || parent.HasExited || target.StartTime.ToUniversalTime().Ticks != targetStart || parent.StartTime.ToUniversalTime().Ticks != parentStart || target.SessionId != Process.GetCurrentProcess().SessionId || Win32.Pid(mainWindow) != target.Id)
             throw new InvalidOperationException("Bound process exited or its identity/session changed.");
     }
 
@@ -67,11 +73,11 @@ internal sealed class DesktopSession : IDisposable
 
     private WindowInfo[] Windows()
     {
-        CheckIdentity(); target.Refresh(); var main = target.MainWindowHandle;
+        CheckIdentity(); var main = mainWindow;
         var result = new List<WindowInfo>();
         Win32.EnumWindows((window, _) =>
         {
-            if (Win32.Pid(window) != target.Id || !Win32.IsWindowVisible(window)) return true;
+            if (Win32.Pid(window) != target.Id || !Win32.IsWindowVisible(window) || !Win32.ControlWindow(window)) return true;
             // Restrict top-level windows to Revit's main window and its owner chain.
             var owner = window;
             for (var i = 0; i < 32 && owner != 0 && owner != main; i++) owner = Win32.GetWindow(owner, Win32.WindowOwner);
@@ -110,7 +116,7 @@ internal sealed class DesktopSession : IDisposable
     private object Start()
     {
         if (!inputEnabled) throw new InvalidOperationException("Desktop input requires --enable-input.");
-        if (owned) return new { status = "owned" };
+        if (owned) return new { status = "owned", focusMethod };
         policy.Resume();
         if (!Win32.Interactive()) throw new InvalidOperationException("Desktop control requires an active, unlocked Windows session. Unlock or reconnect the session running Revit (console or Remote Desktop).");
         using var self = Process.GetCurrentProcess();
@@ -122,7 +128,8 @@ internal sealed class DesktopSession : IDisposable
             hotkey = Win32.RegisterHotKey(messageWindow, 1, Win32.HotkeyControlAltNoRepeat, Win32.KeyF12);
             if (!hotkey) throw new InvalidOperationException("Could not register Ctrl+Alt+F12 emergency Stop.");
             heartbeat.Restart(); inactivity.Restart(); observation = null;
-            target.Refresh(); var main = target.MainWindowHandle;
+            focusMethod = "already-foreground";
+            var main = mainWindow;
             if (main == 0) throw new InvalidOperationException("No Revit window.");
             if (Win32.IsIconic(main)) WaitForFocus(main, () => Win32.ShowWindowAsync(main, 9), () => !Win32.IsIconic(main));
             var windows = Windows(); var foreground = Win32.GetForegroundWindow();
@@ -132,22 +139,58 @@ internal sealed class DesktopSession : IDisposable
                 ?? enabled.FirstOrDefault(w => Resolve(w.WindowRef, windows) == popup)
                 ?? enabled.FirstOrDefault() ?? throw new InvalidOperationException("No enabled Revit window. Close the blocking dialog and retry.");
             var window = Resolve(selected.WindowRef, windows);
-            WaitForFocus(window, () => Win32.SetForegroundWindow(window), () => Win32.GetForegroundWindow() == window && !Win32.IsIconic(window) && Win32.IsWindowEnabled(window));
-            return new { status = "owned" };
+            WaitForFocus(window, () => RequestForeground(window), () => Win32.GetForegroundWindow() == window && !Win32.IsIconic(window) && Win32.IsWindowEnabled(window));
+            return new { status = "owned", focusMethod };
         }
         catch { Stop(); throw; }
+    }
+
+    private void RequestForeground(nint window)
+    {
+        if (Win32.SetForegroundWindow(window)) { focusMethod = "direct"; return; }
+        // A long-lived background helper may lack foreground permission. Use
+        // UI Automation's registered-hotkey technique to receive input ourselves.
+        // The reserved key is consumed by our hotkey, not sent as a Revit command.
+        focusHotkeyReceived = false;
+        focusHotkey = Win32.RegisterHotKey(messageWindow, Win32.FocusHotkeyId, 0x4000, Win32.FocusKey);
+        if (!focusHotkey) throw new InvalidOperationException("Could not register the desktop activation hotkey.");
+        try
+        {
+            WaitForFocus(window, () =>
+            {
+                FocusHandoff.SendHotkey(Application.DoEvents, () =>
+                {
+                    ValidateFocusTarget(window);
+                    if (!Win32.IsWindowEnabled(window)) throw new InvalidOperationException("Revit window became disabled during activation.");
+                }, batch => (int)Win32.SendInput((uint)batch.Length, batch, Marshal.SizeOf<Win32.Input>()), TrackInserted, policy);
+            }, () => focusHotkeyReceived);
+            // WaitForFocus rechecks Stop, process identity, desktop and held input
+            // after pumping and before this final foreground request.
+            Win32.SetForegroundWindow(window);
+            focusMethod = "registered-hotkey";
+        }
+        finally { ReleaseFocusHotkey(); }
+    }
+
+    private void ReleaseFocusHotkey()
+    {
+        if (focusHotkey) { Win32.UnregisterHotKey(messageWindow, Win32.FocusHotkeyId); focusHotkey = false; }
+        focusHotkeyReceived = false;
     }
 
     private void WaitForFocus(nint window, Action request, Func<bool> ready)
     {
         var elapsed = Stopwatch.StartNew();
-        FocusHandoff.Run(request, ready, () =>
-        {
-            CheckIdentity();
-            if (!LeaseReady) throw new InvalidOperationException("Desktop activation stopped.");
-            if (!Win32.Interactive() || Win32.Pid(window) != target.Id || HumanHeldInput())
-                throw new InvalidOperationException("Desktop or input changed while activating Revit. Retry after releasing held keys/buttons.");
-        }, Application.DoEvents, () => Thread.Sleep(25), () => elapsed.Elapsed >= TimeSpan.FromSeconds(2));
+        FocusHandoff.Run(request, ready, () => ValidateFocusTarget(window), Application.DoEvents,
+            () => Thread.Sleep(25), () => elapsed.Elapsed >= TimeSpan.FromSeconds(2));
+    }
+
+    private void ValidateFocusTarget(nint window)
+    {
+        CheckIdentity();
+        if (!LeaseReady) throw new InvalidOperationException("Desktop activation stopped.");
+        if (!Win32.Interactive() || Win32.Pid(window) != target.Id || HumanHeldInput())
+            throw new InvalidOperationException("Desktop or input changed while activating Revit. Retry after releasing held keys/buttons.");
     }
 
     private Observation Observe(Request request)
@@ -314,6 +357,7 @@ internal sealed class DesktopSession : IDisposable
             }
         }
         if (hotkey) { Win32.UnregisterHotKey(messageWindow, 1); hotkey = false; }
+        ReleaseFocusHotkey();
         if (owned) { lease.ReleaseMutex(); owned = false; }
     }
 
