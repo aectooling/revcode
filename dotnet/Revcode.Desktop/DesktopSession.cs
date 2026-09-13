@@ -77,9 +77,11 @@ internal sealed class DesktopSession : IDisposable
         var result = new List<WindowInfo>();
         Win32.EnumWindows((window, _) =>
         {
-            if (Win32.Pid(window) != target.Id || !Win32.IsWindowVisible(window) || !Win32.ControlWindow(window)) return true;
+            if (Win32.Pid(window) != target.Id || !Win32.IsWindowVisible(window)) return true;
+            var menuOwner = Win32.ActiveMenuOwner(window);
+            if (!Win32.ControlWindow(window) && menuOwner == 0) return true;
             // Restrict top-level windows to Revit's main window and its owner chain.
-            var owner = window;
+            var owner = menuOwner != 0 ? menuOwner : window;
             for (var i = 0; i < 32 && owner != 0 && owner != main; i++) owner = Win32.GetWindow(owner, Win32.WindowOwner);
             if (main == 0 || owner != main) return true;
             if (!windowRefs.TryGetValue(window, out var reference)) windowRefs[window] = reference = Guid.NewGuid().ToString("N");
@@ -134,7 +136,7 @@ internal sealed class DesktopSession : IDisposable
             if (Win32.IsIconic(main)) WaitForFocus(main, () => Win32.ShowWindowAsync(main, 9), () => !Win32.IsIconic(main));
             var windows = Windows(); var foreground = Win32.GetForegroundWindow();
             var popup = Win32.GetLastActivePopup(main);
-            var enabled = windows.Where(w => Win32.IsWindowEnabled(Resolve(w.WindowRef, windows))).ToArray();
+            var enabled = windows.Where(w => Win32.ControlWindow(Resolve(w.WindowRef, windows)) && Win32.IsWindowEnabled(Resolve(w.WindowRef, windows))).ToArray();
             var selected = enabled.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground)
                 ?? enabled.FirstOrDefault(w => Resolve(w.WindowRef, windows) == popup)
                 ?? enabled.FirstOrDefault() ?? throw new InvalidOperationException("No enabled Revit window. Close the blocking dialog and retry.");
@@ -249,7 +251,11 @@ internal sealed class DesktopSession : IDisposable
             var (x, y) = Coordinates.Map(frame.Crop, frame.Width, frame.Height,
                 request.X ?? throw new ArgumentException("Pointer actions require x."),
                 request.Y ?? throw new ArgumentException("Pointer actions require y."));
-            if (Win32.GetAncestor(Win32.WindowFromPoint(new() { X = x, Y = y }), Win32.RootAncestor) != observationWindow)
+            var hit = Win32.GetAncestor(Win32.WindowFromPoint(new() { X = x, Y = y }), Win32.RootAncestor);
+            // Native popup menus have a separate HWND. They must belong to this
+            // observed Revit window and appear in its revalidated window set.
+            if (!Win32.PointerTargetAllowed(hit, observationWindow, Win32.ActiveMenuOwner(hit),
+                windowRefs.TryGetValue(hit, out var reference) && frame.Windows.Any(w => w.WindowRef == reference)))
                 throw new InvalidOperationException("Target point is occluded by another window.");
         }
     }

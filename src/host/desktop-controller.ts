@@ -13,12 +13,14 @@ export class DesktopController {
   private epoch = 0;
   private attempted = false;
   private pending = false;
+  private receivingAction = false;
+  private lostLeaseDuringAction = false;
   private saveChain = Promise.resolve();
   private readonly directory: string;
   private readonly journal: string;
 
   constructor(private transport: DesktopTransport | undefined, dataDir: string,
-    private guard: (documentToken: string | null) => void, private changed: () => void, private interrupted: () => void = () => {},
+    private guard: (documentToken: string | null) => void, private changed: () => void, private interrupted: (reason?: string) => void = () => {},
     private contextSnapshot: () => DesktopObservation['context'] = () => undefined) {
     this.directory = resolve(dataDir, 'desktop');
     this.journal = resolve(this.directory, 'journal.json');
@@ -27,12 +29,21 @@ export class DesktopController {
       if (state.unknown) {
         this.status = this.fenced || this.operations.some(op => op.receipt.status === 'unknown') ? 'unknown' : 'unavailable';
         this.error = state.error ?? 'Desktop helper unavailable. Inspect Revit before continuing.';
-        ++this.epoch; this.frame = undefined; this.interrupted();
+        ++this.epoch; this.frame = undefined; this.interrupted(this.error);
       } else if (!state.owned && this.status === 'controlling') {
-        this.status = 'paused'; this.frame = undefined; ++this.epoch; this.interrupted();
+        // A refusal and heartbeat can arrive in the same stdout chunk. Let the
+        // pending receipt distinguish a refusal from interruption after input.
+        if (this.receivingAction) this.lostLeaseDuringAction = true;
+        else this.pauseForLostLease();
       }
       this.changed();
     };
+  }
+
+  private pauseForLostLease() {
+    this.status = 'paused'; this.frame = undefined; ++this.epoch;
+    this.error ??= 'Desktop control paused: Revit lost focus, user input was detected, or the control lease expired.';
+    this.interrupted(this.error);
   }
 
   async init() {
@@ -57,7 +68,7 @@ export class DesktopController {
       await rename(this.journal + '.tmp', this.journal);
     }).catch(error => {
       this.status = 'unknown'; this.error = 'Desktop journal could not be saved. Inspect Revit before further input.';
-      this.frame = undefined; this.changed(); this.interrupted();
+      this.frame = undefined; this.changed(); this.interrupted(this.error);
       void this.transport?.stop().catch(() => {});
       throw error;
     });
@@ -130,6 +141,8 @@ export class DesktopController {
           op.receipt = { status: 'not-dispatched', inserted: 0, error: (error as Error).message };
           await this.persist(); throw error;
         }
+        this.receivingAction = true;
+        this.lostLeaseDuringAction = false;
         try {
           const result = await this.requireTransport().request('action', action, op.operationId) as DesktopReceipt;
           if (!result || !['dispatched', 'not-dispatched', 'unknown'].includes(result.status) || !Number.isInteger(result.inserted) || result.inserted < 0) throw new Error('Invalid desktop dispatch receipt.');
@@ -138,11 +151,17 @@ export class DesktopController {
           op.receipt = { status: error instanceof DesktopRequestError ? 'not-dispatched' : 'unknown', inserted: 0, error: (error as Error).message };
         }
         if (op.receipt.status === 'unknown') { this.status = 'unknown'; this.error = op.receipt.error; }
+        if (op.receipt.status === 'not-dispatched') {
+          this.status = 'paused'; this.error = op.receipt.error;
+        }
+        this.receivingAction = false;
+        if (this.lostLeaseDuringAction && op.receipt.status === 'dispatched' && this.status === 'controlling') this.pauseForLostLease();
+        this.lostLeaseDuringAction = false;
         await this.persist(); this.changed();
         // A missing screenshot is separate from whether input was dispatched.
         try {
           const observation = await this.capture({});
-          if (epoch !== this.epoch || signal?.aborted || this.fenced) observation.actionable = false;
+          if (epoch !== this.epoch || signal?.aborted || this.fenced || this.status !== 'controlling') observation.actionable = false;
           else this.guard(token);
           this.frame = observation.actionable ? observation : undefined;
           return { receipt: op.receipt, observation };

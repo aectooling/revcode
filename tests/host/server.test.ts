@@ -48,6 +48,23 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000, deskto
 }
 
 describe('authenticated Revit host', () => {
+  it('reports the desktop interruption instead of the SDK generic abort', async () => {
+    const fixture = desktopFixture();
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    const { host, api } = await setup({
+      prompt: async (_text, _settings, _context, _history, _execute, _update, desktop) => {
+        await desktop!.observe({});
+        await new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
+      },
+      abort: async () => { rejectPrompt?.(new Error('Request was aborted')); },
+    }, 10000, fixture.transport);
+    expect((await api('chat', { requestId: 'desktop-interruption', text: 'Inspect Revit' })).status).toBe(202);
+    await expect.poll(() => !!rejectPrompt).toBe(true);
+    fixture.transport.onState?.({ owned: false, unknown: false });
+    await expect.poll(() => host.snapshot().messages.at(-1)?.text).toContain('Desktop control paused');
+    expect(host.snapshot().messages.at(-1)?.text).not.toContain('Request was aborted');
+  });
+
   it.each(['chat', 'execute'])('Stop cancels %s while its acceptance journal write is suspended', async path => {
     let prompts = 0;
     const { api, host, dealer } = await setup({ prompt: async () => { prompts++; } });

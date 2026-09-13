@@ -57,7 +57,7 @@ export async function createHost(options: HostOptions) {
     if (!connected()) throw new Error('Revit is disconnected.');
     if (state.operations.some(op => !terminal.has(op.status))) throw new Error('An API operation is pending or unknown. Desktop input is blocked; use the read-only screenshot control.');
     if ((context?.document?.token ?? null) !== token) throw new Error('Active document changed during this desktop workflow. Start a new turn.');
-  }, broadcast, () => { turnAbort?.abort(); void options.agent.abort().catch(() => {}); }, () => ({
+  }, broadcast, reason => { turnAbort?.abort(new Error(reason ?? 'Desktop control stopped.')); void options.agent.abort().catch(() => {}); }, () => ({
     documentToken: context?.document?.token ?? null, documentTitle: context?.document?.title, capturedAt: context?.capturedAt,
     ageMs: context?.capturedAt && Number.isFinite(Date.parse(context.capturedAt)) ? Math.max(0, Date.now() - Date.parse(context.capturedAt)) : undefined,
     source: 'cached-native-context',
@@ -248,7 +248,13 @@ export async function createHost(options: HostOptions) {
       }, text => { message.text = text.slice(0, 200000); broadcast(); }, {
         observe: (input, signal) => desktopTools.observe(input, withTurnSignal(signal)),
         action: (id, input, signal) => desktopTools.action(`${turnId}:${id}`, input, withTurnSignal(signal)),
-      }).catch(error => { message.text += `\n${error instanceof Error ? error.message : 'Agent failed'}`; }).finally(async () => {
+      }).catch(error => {
+        const interruption = controller.signal.reason;
+        const reason = controller.signal.aborted && interruption instanceof Error && interruption.name !== 'AbortError'
+          ? desktop.snapshot().error ?? interruption.message
+          : error instanceof Error ? error.message : 'Agent failed';
+        message.text += `\n${reason}`;
+      }).finally(async () => {
         try { await desktop.endTurn(); } catch { /* Helper disconnect is already fenced. */ }
         chatBusy = false; turnAbort = undefined; await persist(); broadcast();
       });

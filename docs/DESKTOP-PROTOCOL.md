@@ -1,5 +1,13 @@
 # Desktop helper spike protocol
 
+## Native popup menus and interruption reporting
+
+Native Revit popup menus (`#32768`) are included in observation metadata and window-change validation. A pointer action may hit one only when Windows reports active menu mode, matching menu/owner process IDs, the observed Revit window as owner, and the menu in the revalidated observation. Other applications' menus, newly appeared menus and unrelated overlays remain rejected. Custom popup types are not implicitly allowed.
+
+Known non-dispatch receipts pause control and reach the model as tool results. A lost-lease heartbeat that arrives while the action response is pending waits for receipt classification, so it cannot hide a refusal behind a generic SDK abort. Actual interruption after dispatched input still aborts, and chat preserves the desktop reason.
+
+On 2026-09-14, the configured model completed the exact prompt “Using only UI tools, switch the current 3D view to an isometric orientation and set its visual style to Shaded” through the production Pi/DesktopController/DesktopClient stack against live Revit. All three clicks dispatched, including the Shaded popup item, and the resulting screenshot showed the shaded isometric view. This was a separate live test session using the rebuilt helper; the already-running installed chat host requires a reload to receive the correction.
+
 ## Background focus correction
 
 A persistent helper can lose foreground permission after the user works in chat. If its direct request is refused, it temporarily registers an unassigned virtual-key hotkey (0xB9), dispatches a tracked press/release to that registration, processes the hotkey, and requests Revit focus again. This follows Microsoft's [UI Automation focus implementation](https://raw.githubusercontent.com/dotnet/wpf/main/src/Microsoft.DotNet.Wpf/src/UIAutomation/UIAutomationClientSideProviders/MS/Internal/AutomationProxies/Misc.cs). Held human input is rejected; Stop and partial-insertion handling use the same policy as other input. The start response reports `focusMethod` (`already-foreground`, `direct`, or `registered-hotkey`).

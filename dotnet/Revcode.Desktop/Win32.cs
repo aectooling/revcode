@@ -21,6 +21,12 @@ internal static class Win32
     internal const int FocusHotkeyId = 2;
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; public readonly Bounds Bounds => new(Left, Top, Right - Left, Bottom - Top); }
     [StructLayout(LayoutKind.Sequential)] internal struct Point { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] internal struct GuiThreadInfo
+    {
+        public uint Size, Flags;
+        public nint Active, Focus, Capture, MenuOwner, MoveSize, Caret;
+        public Rect CaretRect;
+    }
     [StructLayout(LayoutKind.Sequential)] internal struct Mouse { public int X, Y; public uint Data, Flags, Time; public nuint Extra; }
     [StructLayout(LayoutKind.Sequential)] internal struct Keyboard { public ushort Key, Scan; public uint Flags, Time; public nuint Extra; }
     [StructLayout(LayoutKind.Explicit)] internal struct InputData { [FieldOffset(0)] public Mouse Mouse; [FieldOffset(0)] public Keyboard Keyboard; }
@@ -39,6 +45,8 @@ internal static class Win32
     [DllImport("user32.dll")] internal static extern bool ShowWindowAsync(nint window, int command);
     [DllImport("user32.dll")] internal static extern nint GetLastActivePopup(nint window);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr(nint window, int index);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint window, StringBuilder name, int length);
+    [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(nint window);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);
@@ -82,6 +90,22 @@ internal static class Win32
 
     internal static bool ControlWindowStyle(long extendedStyle) => (extendedStyle & (0x80L | 0x08000000L)) == 0; // TOOLWINDOW / NOACTIVATE
     internal static bool ControlWindow(nint window) => ControlWindowStyle(GetWindowLongPtr(window, -20).ToInt64());
+
+    internal static nint ActiveMenuOwner(nint window)
+    {
+        var name = new StringBuilder(256);
+        if (GetClassName(window, name, name.Capacity) == 0 || name.ToString() != "#32768") return 0;
+        var thread = GetWindowThreadProcessId(window, out var pid);
+        var info = new GuiThreadInfo { Size = (uint)Marshal.SizeOf<GuiThreadInfo>() };
+        if (!GetGUIThreadInfo(thread, ref info) || !MenuOwnerMatches(info.Flags, pid, Pid(info.MenuOwner))) return 0;
+        return GetAncestor(info.MenuOwner, RootAncestor);
+    }
+
+    internal static bool MenuOwnerMatches(uint flags, uint menuPid, uint ownerPid) =>
+        (flags & (0x4 | 0x10)) != 0 && menuPid != 0 && menuPid == ownerPid;
+
+    internal static bool PointerTargetAllowed(nint hit, nint observedWindow, nint menuOwner, bool menuObserved) =>
+        hit != 0 && observedWindow != 0 && (hit == observedWindow || (menuOwner == observedWindow && menuObserved));
 
     internal static nint MainWindow(int pid)
     {

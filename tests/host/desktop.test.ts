@@ -17,12 +17,14 @@ async function setup() {
   let guardError = '', actionError: Error | undefined, captureError = false, stops = 0, interruptions = 0;
   let releaseCapture: (() => void) | undefined;
   let blockCapture = false;
+  let loseLeaseDuringAction = false;
   const transport: DesktopTransport = {
     request: async (kind, input, id) => {
       calls.push({ kind, input, id });
       if (kind === 'action') {
         const saved = JSON.parse(await readFile(join(dir, 'desktop/journal.json'), 'utf8'));
         expect(saved.at(-1).receipt.status).toBe('unknown'); // intent precedes input
+        if (loseLeaseDuringAction) transport.onState?.({ owned: false, unknown: false });
         if (actionError) throw actionError;
         return { status: 'dispatched', inserted: 3 };
       }
@@ -41,7 +43,7 @@ async function setup() {
   return { controller, transport, dir, calls, tools: controller.beginTurn('doc'),
     guard: (error: string) => { guardError = error; }, failAction: (error: Error) => { actionError = error; },
     failCapture: () => { captureError = true; }, block: () => { blockCapture = true; }, release: () => releaseCapture?.(),
-    stops: () => stops, interruptions: () => interruptions };
+    loseLease: () => { loseLeaseDuringAction = true; }, stops: () => stops, interruptions: () => interruptions };
 }
 
 it('starts once per turn, delivers PNGs, journals before input, and deduplicates action IDs', async () => {
@@ -98,9 +100,23 @@ it('transport failure persists unknown input and blocks API mutations even after
 
 it('helper validation refusal is confirmed non-dispatch, while capture failure preserves a successful receipt', async () => {
   const fixture = await setup(); const image = await fixture.tools.observe({});
+  fixture.loseLease(); // Heartbeat arrives before the action promise resumes.
   fixture.failAction(new DesktopRequestError('Stale image'));
   const refused = await fixture.tools.action('refused', { observationId: image.observationId, action: 'click', x: 0, y: 0 });
   expect(refused.receipt.status).toBe('not-dispatched'); expect(fixture.controller.fenced).toBe(false);
+  expect(refused.observation?.actionable).toBe(false);
+  expect(fixture.controller.snapshot()).toMatchObject({ status: 'paused', error: 'Stale image' });
+  fixture.transport.onState?.({ owned: false, unknown: false });
+  expect(fixture.interruptions()).toBe(0); // Deliver the refusal to the model, not a generic abort.
+});
+
+it('lease loss while awaiting a dispatched receipt still interrupts control', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({}); fixture.loseLease();
+  const result = await fixture.tools.action('interrupted', { observationId: image.observationId, action: 'click', x: 0, y: 0 });
+  expect(result.receipt.status).toBe('dispatched');
+  expect(result.observation?.actionable).toBe(false);
+  expect(fixture.interruptions()).toBe(1);
+  expect(fixture.controller.snapshot().status).toBe('paused');
 });
 
 it('post-action screenshot failure cannot erase dispatch or permit replay', async () => {
@@ -116,6 +132,7 @@ it('a lost lease aborts the workflow instead of reacquiring focus', async () => 
   const fixture = await setup(); await fixture.tools.observe({});
   fixture.transport.onState?.({ owned: false, unknown: false });
   expect(fixture.interruptions()).toBe(1);
+  expect(fixture.controller.snapshot().error).toContain('Desktop control paused');
   await expect(fixture.tools.observe({})).rejects.toThrow('stopped');
   expect(fixture.calls.filter(call => call.kind === 'start')).toHaveLength(1);
 });

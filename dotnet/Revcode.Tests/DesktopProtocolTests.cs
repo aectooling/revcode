@@ -6,6 +6,29 @@ namespace Revcode.Tests;
 public class DesktopProtocolTests
 {
     [Theory]
+    [InlineData(1, 1, 0, false, true)]
+    [InlineData(2, 1, 1, true, true)]
+    [InlineData(2, 1, 1, false, false)] // Menu appeared after observation.
+    [InlineData(2, 1, 3, true, false)] // Another window's menu.
+    [InlineData(2, 1, 0, true, false)] // Unrelated overlay or tooltip.
+    [InlineData(0, 0, 0, true, false)]
+    public void PointerRequiresObservedWindowOrItsObservedActiveMenu(int hit, int window, int owner, bool observed, bool expected) =>
+        Assert.Equal(expected, Win32.PointerTargetAllowed(hit, window, owner, observed));
+
+    [Fact]
+    public void GuiThreadInfoMatchesWindowsX64Abi() =>
+        Assert.Equal(72, System.Runtime.InteropServices.Marshal.SizeOf<Win32.GuiThreadInfo>());
+
+    [Theory]
+    [InlineData(4u, 100u, 100u, true)]
+    [InlineData(16u, 100u, 100u, true)]
+    [InlineData(0u, 100u, 100u, false)]
+    [InlineData(4u, 100u, 200u, false)]
+    [InlineData(4u, 0u, 0u, false)]
+    public void PopupMenuRequiresActiveMenuModeAndSameProcess(uint flags, uint menuPid, uint ownerPid, bool expected) =>
+        Assert.Equal(expected, Win32.MenuOwnerMatches(flags, menuPid, ownerPid));
+
+    [Theory]
     [InlineData(0, 2u, 1u, true)] // Active RDP.
     [InlineData(0, 1u, 1u, true)] // Active console.
     [InlineData(4, 2u, 1u, false)] // Disconnected RDP.
