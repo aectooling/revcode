@@ -9,17 +9,12 @@ export const Dialog = DialogPrimitive.Root;
 export function DialogContent({
   className,
   children,
-  hideClose,
-  overlayClassName,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Content> & {
-  hideClose?: boolean;
-  overlayClassName?: string;
-}) {
+}: ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
-        className={cn("fixed inset-0 z-40 bg-ink/30 animate-fade-in", overlayClassName)}
+        className="fixed inset-0 z-40 bg-ink/30 animate-fade-in"
       />
       <DialogPrimitive.Content
         className={cn(
@@ -29,16 +24,14 @@ export function DialogContent({
         {...props}
       >
         {children}
-        {!hideClose && (
-          <Tooltip content="Close">
-            <DialogPrimitive.Close
-              className="absolute right-3 top-3 rounded-sm p-1 text-muted transition-colors hover:bg-ink/[.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              aria-label="Close"
-            >
-              <X className="size-4" />
-            </DialogPrimitive.Close>
-          </Tooltip>
-        )}
+        <Tooltip content="Close">
+          <DialogPrimitive.Close
+            className="absolute right-3 top-3 rounded-sm p-1 text-muted transition-colors hover:bg-ink/[.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Close"
+          >
+            <X className="size-4" />
+          </DialogPrimitive.Close>
+        </Tooltip>
       </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );
@@ -46,15 +39,6 @@ export function DialogContent({
 
 export function DialogHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("grid gap-1 pr-8", className)} {...props} />;
-}
-
-export function DialogKicker({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
-  return (
-    <p
-      className={cn("text-[11px] font-medium uppercase tracking-wider text-muted", className)}
-      {...props}
-    />
-  );
 }
 
 export function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {
@@ -76,8 +60,4 @@ export function DialogDescription({
       {...props}
     />
   );
-}
-
-export function DialogFooter({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-wrap items-center justify-end gap-2", className)} {...props} />;
 }

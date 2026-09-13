@@ -8,9 +8,7 @@ import {
 } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
-import type { AuthState, Provider } from "./components/provider-types";
-
-export type { Provider, AuthState } from "./components/provider-types";
+import type { AuthState, ProviderSummary as Provider } from "../../src/host/types";
 
 type Props = {
   providers: Provider[];

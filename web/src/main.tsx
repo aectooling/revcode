@@ -13,7 +13,7 @@ import { Conversation } from "./components/conversation";
 import { ExecutionHistory, type Operation } from "./components/execution-history";
 import { ModelControls } from "./components/model-picker";
 import { ProviderDialog } from "./provider-dialog";
-import type { AuthState, Provider } from "./components/provider-types";
+import type { AuthState, Context, Message, ProviderSummary, Settings } from "../../src/host/types";
 import { Sidebar } from "./components/sidebar";
 import { ToastRegion, type ToastLevel, type ToastNotice } from "./components/toasts";
 import { Badge } from "./components/ui/badge";
@@ -33,27 +33,11 @@ type HostState = {
   instanceId: string;
   connected: boolean;
   busy: boolean;
-  context: null | {
-    revitVersion: string;
-    revitBuild: string;
-    runtime: string;
-    document: null | {
-      token: string;
-      title: string;
-      isFamily: boolean;
-      isReadOnly: boolean;
-      activeView: string;
-      selection: string[];
-    };
-  };
-  messages: {
-    id: string;
-    role: "user" | "assistant" | "system";
-    text: string;
-  }[];
+  context: Context | null;
+  messages: Message[];
   operations: Operation[];
-  settings: { provider: string; model: string; configured: boolean };
-  providers: Provider[];
+  settings: Settings;
+  providers: ProviderSummary[];
   auth?: AuthState;
 };
 
@@ -225,10 +209,6 @@ function App() {
     };
   }, [activeToken]);
 
-  useEffect(() => {
-    document.title = "Revcode";
-  }, []);
-
   const doc = state?.context?.document ?? null;
   const ready = hostOnline && !!state?.connected && !!doc;
   const busy = pending || !!state?.busy;
@@ -334,7 +314,10 @@ function App() {
   return (
     <TooltipProvider>
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink lg:flex-row">
-        <a className="skip-link" href="#prompt">
+        <a className="skip-link" href="#prompt" onClick={(event) => {
+          event.preventDefault();
+          composer.current?.focus();
+        }}>
           Skip to message
         </a>
         <Sidebar
@@ -416,7 +399,6 @@ function App() {
                 </>
               ) : undefined
             }
-            streaming={busy}
             canAbort={busy}
             abortDisabled={pending || !hostOnline}
             onAbort={() => void cancel()}

@@ -186,17 +186,38 @@ try {
     page.getByText("Revit connected", { exact: true }),
   ).toBeVisible();
   await expect(page).toHaveURL(`${host.url}/`);
+  await page.getByRole("link", { name: "Skip to message" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Message the assistant")).toBeFocused();
+  expect((await page.waitForResponse((response) => new URL(response.url()).pathname === "/api/state")).status()).toBe(200);
+  expect(await page.evaluate(() => sessionStorage.getItem("revcode.token"))).toBe(host.browserToken);
+  await expect(page).toHaveURL(`${host.url}/`);
   await expect(
     page.getByRole("button", { name: "Send", exact: true }),
   ).toBeDisabled();
   await page.locator(".console-button").click();
+  context.document.isReadOnly = true;
+  await send("context", context);
+  await page.getByLabel("Execution mode").selectOption("modify");
+  await expect(page.getByRole("button", { name: "Run C#" })).toBeDisabled();
+  let executeRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/execute") executeRequests++;
+  });
+  await page.locator("#code").press("Control+Enter");
+  // Let any request from the keyboard handler reach the host before checking.
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+  expect(executeRequests).toBe(0);
+  await page.getByLabel("Execution mode").selectOption("query");
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
-  await page.getByRole("button", { name: "Run C#" }).click();
+  await page.locator("#code").press("Control+Enter");
   await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
   await expect(page.locator(".operation")).toHaveCount(1);
   await page.reload();
   await expect(page.locator(".operation")).toHaveCount(1);
   expect(commandCount).toBe(1);
+  context.document.isReadOnly = false;
+  await send("context", context);
 
   await page.locator(".console-button").click();
   await page

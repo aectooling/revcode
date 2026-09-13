@@ -20,9 +20,12 @@ for (let index = 0; index < args.length; index++) {
   const token = args[index];
   const option = token.replace(/^-+/, "").toLowerCase();
   if (option === "revit-years" || option === "revityears") {
-    for (const year of (args[++index] ?? "").split(",")) {
-      if (year.trim()) years.push(year.trim());
+    const value = args[++index];
+    if (!value?.trim()) {
+      console.error("revit-years requires a comma-separated list of years.");
+      process.exit(1);
     }
+    years.push(...value.split(",").map((year) => year.trim()));
     continue;
   }
   const mapped = ALIASES[option];
@@ -58,11 +61,6 @@ const commandArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", fileUR
 if (switches.has("OpenRevit")) commandArgs.push("-OpenRevit");
 if (switches.has("BuildOnly")) commandArgs.push("-BuildOnly");
 if (years.length) {
-  const unknown = years.filter((year) => !["2025", "2026", "2027"].includes(year));
-  if (unknown.length) {
-    console.error(`Unknown Revit year(s): ${unknown.join(", ")}. Supported: 2025, 2026, 2027.`);
-    process.exit(1);
-  }
   commandArgs.push("-RevitYears", years.join(","));
 }
 

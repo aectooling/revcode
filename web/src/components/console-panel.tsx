@@ -75,6 +75,7 @@ export function ConsolePanel({
   onCancel(): void;
   docReadOnly: boolean;
 }): ReactNode {
+  const runDisabled = !canRun || !code.trim() || (mode === "modify" && docReadOnly);
   return (
     <section aria-label="C# console" className="grid gap-1.5">
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Snippet examples">
@@ -98,13 +99,14 @@ export function ConsolePanel({
       </div>
       <textarea
         id="code"
+        aria-label="C# method body"
         spellCheck={false}
         value={code}
         onChange={(event) => onCodeChange(event.target.value)}
         onKeyDown={(event) => {
           if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
             event.preventDefault();
-            if (code.trim() && canRun) onRun();
+            if (!runDisabled) onRun();
           }
         }}
         className="min-h-[220px] w-full resize-y rounded-md border border-line bg-surface p-3 font-mono text-[13px] leading-relaxed outline-none transition-colors hover:border-line-strong focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/15"
@@ -128,7 +130,7 @@ export function ConsolePanel({
             Stop
           </Button>
         ) : (
-          <Button disabled={!canRun || !code.trim() || (mode === "modify" && docReadOnly)} onClick={onRun}>
+          <Button disabled={runDisabled} onClick={onRun}>
             Run C#
           </Button>
         )}

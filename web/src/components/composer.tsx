@@ -24,7 +24,6 @@ export type ComposerProps = {
   submitDisabled: boolean;
   /** Explains why sending is blocked. Shown above the text field. */
   alert?: ReactNode;
-  streaming: boolean;
   canAbort: boolean;
   abortDisabled?: boolean;
   onAbort(): void;
@@ -41,7 +40,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     disabled,
     submitDisabled,
     alert,
-    streaming,
     canAbort,
     abortDisabled = false,
     onAbort,

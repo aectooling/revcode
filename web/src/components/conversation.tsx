@@ -5,15 +5,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { cn } from "../lib/utils";
+import type { Message } from "../../../src/host/types";
 import { MessageMarkdown } from "./message-markdown";
 import { Button } from "./ui/button";
-
-export type ChatMessage = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  text: string;
-};
 
 const SUGGESTIONS = [
   "List the levels and their elevations.",
@@ -80,7 +74,7 @@ export function Conversation({
   configured,
   onSuggestion,
 }: {
-  messages: ChatMessage[];
+  messages: Message[];
   busy: boolean;
   connected: boolean;
   configured: boolean;
@@ -172,9 +166,7 @@ export function Conversation({
         <Button
           size="sm"
           variant="secondary"
-          className={cn(
-            "absolute bottom-3 left-1/2 -translate-x-1/2 shadow-pop animate-pop-in",
-          )}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 shadow-pop animate-pop-in"
           // Keep the composer from collapsing and moving this button before pointer-up.
           onPointerDown={(event) => {
             if (event.button === 0) event.preventDefault();

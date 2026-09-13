@@ -1,6 +1,5 @@
-import { useMemo } from "react";
 import { providerLabel } from "../lib/utils";
-import type { Provider } from "./provider-types";
+import type { ProviderSummary as Provider } from "../../../src/host/types";
 import {
   Select,
   SelectContent,
@@ -33,14 +32,7 @@ export function ModelControls({
   onSelectModel,
   onManageProvider,
 }: ModelControlsProps) {
-  const groupedModels = useMemo(() => {
-    const groups = new Map<string, Provider["models"]>();
-    for (const provider of providers) {
-      if (!provider.models.length) continue;
-      groups.set(provider.id, provider.models);
-    }
-    return [...groups.entries()];
-  }, [providers]);
+  const groupedModels = providers.filter((provider) => provider.models.length > 0);
 
   if (connected && !groupedModels.length) {
     return (
@@ -72,7 +64,7 @@ export function ModelControls({
         <SelectValue placeholder="Waiting for models" />
       </SelectTrigger>
       <SelectContent align="start">
-        {groupedModels.map(([provider, models]) => (
+        {groupedModels.map(({ id: provider, models }) => (
           <SelectGroup key={provider}>
             <SelectLabel>{providerLabel(provider, providers)}</SelectLabel>
             {models.map((model) => (

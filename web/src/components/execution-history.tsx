@@ -1,5 +1,4 @@
 import { ChevronRight } from "lucide-react";
-import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 
 export type Operation = {
@@ -48,10 +47,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
       ) : (
         <div className="mt-2 grid gap-1">
           {operations.map((operation) => {
-            const open =
-              operation.status === "failed" ||
-              operation.status === "unknown" ||
-              !["succeeded", "cancelled"].includes(operation.status);
+            const open = !["succeeded", "cancelled"].includes(operation.status);
             return (
               <details
                 className="operation group overflow-hidden rounded-[5px] border border-line bg-surface text-xs transition-colors hover:border-line-strong"
@@ -86,7 +82,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
                     <p className="text-[11px] leading-relaxed text-danger">{operation.error}</p>
                   )}
                   {operation.diagnostics?.map((diagnostic, index) => (
-                    <p key={index} className={cn("text-[11px] leading-relaxed text-ink-soft")}>
+                    <p key={index} className="text-[11px] leading-relaxed text-ink-soft">
                       <strong className="font-semibold">{diagnostic.severity}</strong>
                       {diagnostic.line
                         ? ` · line ${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ""}`

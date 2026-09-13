@@ -3,7 +3,7 @@ param(
     [switch]$OpenRevit,
     [switch]$BuildOnly,
     [switch]$Help,
-    [ValidateSet('2025', '2026', '2027')][string[]]$RevitYears = @('2026')
+    [ValidatePattern('^(2025|2026|2027)(,(2025|2026|2027))*$')][string]$RevitYears = '2026'
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -18,25 +18,13 @@ Requires Node.js 22.19+, the .NET SDK, and installed Revit API assemblies.
 Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-install.ps1 [options]
   -OpenRevit   Open Revit after installation.
   -BuildOnly   Build and verify the package without installing it.
-  -RevitYears  Revit versions to build, e.g. -RevitYears 2025,2026. Default: 2026.
+  -RevitYears  Revit versions to build, e.g. -RevitYears '2025,2026'. Default: 2026.
   -Help        Show this help.
 
 Close Revit before installing. The installer replaces the registered
 per-user add-in without prompting.
 '@
     exit 0
-}
-
-function Invoke-Checked {
-    param([string]$Command, [string[]]$CommandArgs)
-    & $Command @CommandArgs
-    if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE" }
-}
-
-function Assert-RevitClosed {
-    if (Get-Process -Name Revit -ErrorAction SilentlyContinue) {
-        throw 'Revit is running. Close Revit fully, then run this script again.'
-    }
 }
 
 try {
@@ -50,24 +38,17 @@ try {
     if ([version]$nodeVersion.Substring(1) -lt [version]'22.19.0') {
         throw "Requires stable Node.js 22.19.0 or newer; found $nodeVersion."
     }
-    foreach ($year in $RevitYears) {
-        if (-not (Test-Path -LiteralPath "C:\Program Files\Autodesk\Revit $year\RevitAPI.dll")) {
-            throw "Revit $year API assemblies are missing. Install that Revit version or adjust -RevitYears."
-        }
+    if (-not $BuildOnly -and (Get-Process -Name Revit -ErrorAction SilentlyContinue)) {
+        throw 'Revit is running. Close Revit fully, then run this script again.'
     }
-    if (-not $BuildOnly) { Assert-RevitClosed }
+    $years = $RevitYears.Split(',') | Select-Object -Unique
 
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $version = (Get-Content -LiteralPath (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json).version
     $stage = Join-Path $repoRoot ("artifacts\revcode-$version-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 
     Write-Host "[revcode] Building and staging package at $stage"
-    Invoke-Checked 'powershell.exe' @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-        (Join-Path $PSScriptRoot 'package.ps1'),
-        '-RevitYears', ($RevitYears -join ','),
-        '-OutputDirectory', $stage
-    )
+    & (Join-Path $PSScriptRoot 'package.ps1') -RevitYears $years -OutputDirectory $stage
     if (-not (Test-Path -LiteralPath (Join-Path $stage 'package-info.json'))) {
         throw 'Packaging did not produce package-info.json.'
     }
@@ -76,14 +57,10 @@ try {
         Write-Host "[revcode] Build and verification passed. Package files: $stage"
     } else {
         Write-Host '[revcode] Installing the staged package'
-        Invoke-Checked 'powershell.exe' @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-            (Join-Path $PSScriptRoot 'install.ps1'),
-            '-PackagePath', $stage
-        )
+        & (Join-Path $PSScriptRoot 'install.ps1') -PackagePath $stage
         Write-Host "[revcode] Installed revcode $version. Open Revit, open a project, and click Add-Ins > Revcode."
         if ($OpenRevit) {
-            foreach ($year in ($RevitYears | Sort-Object -Descending)) {
+            foreach ($year in ($years | Sort-Object -Descending)) {
                 $revitExe = "C:\Program Files\Autodesk\Revit $year\Revit.exe"
                 if (Test-Path -LiteralPath $revitExe) {
                     Write-Host "[revcode] Starting Revit $year"
