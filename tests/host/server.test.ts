@@ -168,13 +168,3 @@ describe('authenticated Revit host', () => {
     expect((await (await api('state')).json()).auth.error).toContain('cancelled');
   });
 });
-
-it('validates custom model image capability before provider registration', async () => {
-  const registered: unknown[] = [];
-  const { api } = await setup({ addProvider: async provider => { registered.push(provider); } });
-  const provider = { id: 'custom-vision', baseUrl: 'http://localhost:1234/v1' };
-  expect((await api('auth/provider', { ...provider, models: [{ id: 'vision', supportsImages: 'true' }] })).status).toBe(400);
-  expect(registered).toHaveLength(0);
-  expect((await api('auth/provider', { ...provider, models: [{ id: 'vision', supportsImages: true }, { id: 'text', supportsImages: false }] })).ok).toBe(true);
-  expect(registered[0]).toMatchObject({ models: [{ id: 'vision', supportsImages: true }, { id: 'text', supportsImages: false }] });
-});

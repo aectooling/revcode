@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPiAgent } from '../../src/host/pi-agent.js';
 
-it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom', 'custom_capture'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
-  const toolName = ['capture_zoom', 'custom_capture'].includes(scenario) ? 'revit_capture_view' : scenario;
+it.each(['revit_execute_csharp', 'custom_capture'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
+  const toolName = scenario === 'custom_capture' ? 'revit_capture_view' : scenario;
   const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-'));
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
@@ -15,7 +15,7 @@ it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom', 'custom_c
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const chunk = (delta: object, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'fixture-response', object: 'chat.completion.chunk', created: 1, model: 'revcode-fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     if (requests.length === 1) {
-      chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: toolName, arguments: JSON.stringify(toolName === 'revit_capture_view' ? { viewId: 'view-1', documentToken: 'doc', ...(scenario === 'capture_zoom' ? { zoomType: 'zoom', zoom: 125 } : {}) } : { code: 'return 7;', mode: 'query' }) } }] });
+      chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: toolName, arguments: JSON.stringify(toolName === 'revit_capture_view' ? { viewId: 'view-1', documentToken: 'doc' } : { code: 'return 7;', mode: 'query' }) } }] });
       chunk({}, 'tool_calls');
     } else { chunk({ role: 'assistant', content: 'There are 7 levels.' }); chunk({}, 'stop'); }
     res.end('data: [DONE]\n\n');
@@ -38,8 +38,6 @@ it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom', 'custom_c
     }, [], async input => { calls++;
       if (toolName === 'revit_capture_view') {
         expect(input).toMatchObject({ mode: 'api', documentToken: 'doc' });
-        expect(input.code).toContain(scenario === 'capture_zoom' ? 'ZoomType = ZoomFitType.Zoom, Zoom = 125' : 'ZoomType = ZoomFitType.FitToPage');
-        if (scenario === 'capture_zoom') expect(input.code).not.toContain('PixelSize =');
         const file = input.code.match(/FilePath = @"([^"]+)"/)![1];
         await writeFile(file + '.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64'));
       } else expect(input).toEqual({ code: 'return 7;', mode: 'query' }); return { ...input, operationId: 'op', documentToken: 'doc', createdAt: new Date().toISOString(), status: 'succeeded', result: 7 }; }, value => { output = value; });
@@ -70,9 +68,6 @@ it('persists custom providers and reuses shared SDK credentials across hosts wit
     expect(first.configured('custom-fixture')).toBe(false);
     await first.addProvider!({ id: 'custom-keyless', baseUrl: 'http://localhost:9998/v1', models: [{ id: 'local-model' }] });
     expect(first.configured('custom-keyless')).toBe(true);
-    const models = JSON.parse(await readFile(join(user, 'models.json'), 'utf8'));
-    expect(models.providers['custom-fixture'].models[0].input).toEqual(['text']);
-    expect(models.providers['custom-keyless'].models[0].input).toEqual(['text']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 30000);
 

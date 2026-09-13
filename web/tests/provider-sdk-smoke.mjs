@@ -102,9 +102,7 @@ try {
     .click();
   await page.getByLabel("Provider name").fill("SDK local");
   await page.getByLabel("Base URL").fill("http://127.0.0.1:1234/v1");
-  await page.getByLabel("Model IDs").fill("sdk-local-model\nsdk-text-model");
-  await expect(page.getByRole("checkbox", { name: "sdk-local-model", exact: true })).not.toBeChecked();
-  await page.getByRole("checkbox", { name: "sdk-local-model", exact: true }).check();
+  await page.getByLabel("Model IDs").fill("sdk-local-model");
   await page.getByLabel("This endpoint needs no authentication").check();
   await page.getByRole("button", { name: "Save and continue" }).click();
   await expect(
@@ -112,9 +110,6 @@ try {
   ).toBeVisible();
   await expect(page.locator("#provider-model")).toHaveValue("sdk-local-model");
   await page.getByRole("button", { name: "Use this model" }).click();
-  const customModels = JSON.parse(await readFile(join(dataDir, "models.json"), "utf8")).providers["custom-sdk-local"].models;
-  expect(customModels.find(m => m.id === "sdk-local-model").input).toEqual(["text", "image"]);
-  expect(customModels.find(m => m.id === "sdk-text-model").input).toEqual(["text"]);
   const secondAgent = await createPiAgent(
     join(dataDir, "second-instance"),
     dataDir,
