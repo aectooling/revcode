@@ -492,7 +492,7 @@ export function ProviderDialog({
                   setKey("");
                 }}
                 disabled={busy}
-                className="size-3.5 accent-[#e66232]"
+                className="size-3.5 accent-accent"
               />
               This endpoint needs no authentication
             </label>

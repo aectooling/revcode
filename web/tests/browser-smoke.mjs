@@ -189,7 +189,7 @@ try {
   await expect(
     page.getByRole("button", { name: "Send", exact: true }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "C# console", exact: true }).click();
+  await page.locator(".console-button").click();
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
   await page.getByRole("button", { name: "Run C#" }).click();
   await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
@@ -198,7 +198,7 @@ try {
   await expect(page.locator(".operation")).toHaveCount(1);
   expect(commandCount).toBe(1);
 
-  await page.getByRole("button", { name: "C# console", exact: true }).click();
+  await page.locator(".console-button").click();
   await page
     .getByRole("button", { name: "Test rollback", exact: true })
     .click();
@@ -220,6 +220,8 @@ try {
   ).toBeEnabled();
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.getByRole("button", { name: /Set up a provider/ }).click();
   await expect(
@@ -303,7 +305,6 @@ try {
   ).toBeVisible();
   await expect(page.locator("#provider-model")).toHaveValue("local-test-model");
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await page.getByLabel("Message the assistant").fill("Inspect the model.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(
@@ -317,9 +318,8 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("button", { name: "C# console", exact: true }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.locator(".console-button")).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

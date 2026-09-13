@@ -5,6 +5,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
+  Terminal,
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -45,6 +46,7 @@ export type SidebarProps = {
   mobileOpen: boolean;
   onMobileOpenChange(open: boolean): void;
   onManageProvider(): void;
+  onOpenConsole(): void;
 };
 
 /** The connection summary is rendered once per DOM: desktop card XOR mobile strip. */
@@ -178,6 +180,24 @@ function ProviderCard({
   );
 }
 
+function ConsoleCard({ onOpenConsole }: { onOpenConsole(): void }) {
+  return (
+    <button
+      type="button"
+      className="console-button flex items-center gap-2 rounded-sm border border-line bg-surface px-2.5 py-2 text-left transition-colors hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      onClick={onOpenConsole}
+    >
+      <Terminal className="size-3.5 shrink-0 text-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium text-ink">C# console</span>
+        <span className="block truncate text-[11px] text-muted">
+          Run snippets against Revit
+        </span>
+      </span>
+    </button>
+  );
+}
+
 function Brand() {
   return (
     <span className="flex flex-1 items-center gap-2 text-[13px] font-semibold tracking-tight">
@@ -199,6 +219,7 @@ export function Sidebar(props: SidebarProps) {
     mobileOpen,
     onMobileOpenChange,
     onManageProvider,
+    onOpenConsole,
   } = props;
   const isDesktop = useIsDesktop();
   const { tone, label } = useConnectionSummary(hostOnline, revitConnected);
@@ -206,6 +227,7 @@ export function Sidebar(props: SidebarProps) {
   const panels: ReactNode = (
     <>
       <DocumentCard document={props.document} />
+      <ConsoleCard onOpenConsole={onOpenConsole} />
       <ProviderCard
         configured={props.providerConfigured}
         name={props.providerName}
@@ -285,6 +307,15 @@ export function Sidebar(props: SidebarProps) {
             title="Manage provider"
           >
             <KeyRound className="size-4" />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onOpenConsole}
+            aria-label="C# console"
+            title="C# console"
+          >
+            <Terminal className="size-4" />
           </Button>
           <div className="mt-auto grid pb-2" aria-label="Status">
             <Tooltip content={`Revit session: ${revitConnected ? "connected" : "offline"}`}>

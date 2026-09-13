@@ -17,6 +17,13 @@ import type { AuthState, Provider } from "./components/provider-types";
 import { Sidebar } from "./components/sidebar";
 import { ToastRegion, type ToastLevel, type ToastNotice } from "./components/toasts";
 import { Badge } from "./components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
 import mark from "./assets/revcode-mark.svg";
@@ -142,12 +149,12 @@ function App() {
   const [state, setState] = useState<HostState | null>(null);
   const [hostOnline, setHostOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
-  const [tab, setTab] = useState<"chat" | "console">("chat");
   const [prompt, setPrompt] = useState("");
   const [code, setCode] = useState(examples[0].code);
   const [mode, setMode] = useState<Mode>("query");
   const [pending, setPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notices, setNotices] = useState<ToastNotice[]>([]);
@@ -344,40 +351,15 @@ function App() {
           mobileOpen={mobileOpen}
           onMobileOpenChange={setMobileOpen}
           onManageProvider={openSettings}
+          onOpenConsole={() => {
+            setMobileOpen(false);
+            setConsoleOpen(true);
+          }}
         />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
-            <nav
-              aria-label="Workspace"
-              className="flex shrink-0 items-center rounded-sm bg-surface-muted p-0.5"
-            >
-              <button
-                type="button"
-                aria-pressed={tab === "chat"}
-                onClick={() => setTab("chat")}
-                className={
-                  tab === "chat"
-                    ? "h-6 rounded-[3px] bg-surface px-2 text-xs font-medium text-ink shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    : "h-6 rounded-[3px] px-2 text-xs font-medium text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                }
-              >
-                Assistant
-              </button>
-              <button
-                type="button"
-                aria-pressed={tab === "console"}
-                onClick={() => setTab("console")}
-                className={
-                  tab === "console"
-                    ? "h-6 rounded-[3px] bg-surface px-2 text-xs font-medium text-ink shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    : "h-6 rounded-[3px] px-2 text-xs font-medium text-muted transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                }
-              >
-                C# console
-              </button>
-            </nav>
             <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-tight text-ink-soft">
-              {tab === "chat" ? "Build with your model." : "A direct line to Revit."}
+              Build with your model.
             </h1>
             <StatusPill
               hostOnline={hostOnline}
@@ -403,77 +385,98 @@ function App() {
               </span>
             </div>
           )}
-          {tab === "chat" ? (
-            <>
-              <Conversation
-                messages={state?.messages ?? []}
-                busy={busy}
-                connected={hostOnline}
-                configured={!!state?.settings.configured}
-                onSuggestion={(text) => {
-                  setPrompt(text);
-                  composer.current?.focus();
-                }}
-              />
-              <Composer
-                ref={composer}
-                draft={prompt}
-                onDraftChange={setPrompt}
-                onSubmit={() => void submitChat()}
-                disabled={!hostOnline}
-                submitDisabled={!canExecute || !state?.settings.configured}
-                alert={
-                  hostOnline && state && !state.settings.configured ? (
-                    <>
-                      <button type="button" onClick={openSettings}>
-                        Connect a provider
-                      </button>{" "}
-                      to use the assistant, or{" "}
-                      <button type="button" onClick={() => setTab("console")}>
-                        test the C# console
-                      </button>{" "}
-                      without credentials.
-                    </>
-                  ) : undefined
-                }
-                streaming={busy}
-                canAbort={busy}
-                abortDisabled={pending || !hostOnline}
-                onAbort={() => void cancel()}
-                controls={
-                  <>
-                    <ModelControls
-                      connected={hostOnline && !!state}
-                      providers={state?.providers ?? []}
-                      selected={
-                        state?.settings ?? { provider: "", model: "" }
-                      }
-                      onSelectModel={(provider, model) =>
-                        void selectModel(provider, model)
-                      }
-                      onManageProvider={openSettings}
-                    />
-                    <DocumentTarget label={doc?.title ?? "No document"} />
-                  </>
-                }
-              />
-            </>
-          ) : (
-            <ConsolePanel
-              code={code}
-              onCodeChange={setCode}
-              mode={mode}
-              onModeChange={setMode}
-              busy={busy}
-              pending={pending}
-              canRun={canExecute}
-              onRun={() => void executeSnippet()}
-              onCancel={() => void cancel()}
-              docReadOnly={!!doc?.isReadOnly}
-            />
-          )}
-          <ExecutionHistory operations={operations} />
+          <Conversation
+            messages={state?.messages ?? []}
+            busy={busy}
+            connected={hostOnline}
+            configured={!!state?.settings.configured}
+            onSuggestion={(text) => {
+              setPrompt(text);
+              composer.current?.focus();
+            }}
+          />
+          <Composer
+            ref={composer}
+            draft={prompt}
+            onDraftChange={setPrompt}
+            onSubmit={() => void submitChat()}
+            disabled={!hostOnline}
+            submitDisabled={!canExecute || !state?.settings.configured}
+            alert={
+              hostOnline && state && !state.settings.configured ? (
+                <>
+                  <button type="button" onClick={openSettings}>
+                    Connect a provider
+                  </button>{" "}
+                  to use the assistant, or{" "}
+                  <button type="button" onClick={() => setConsoleOpen(true)}>
+                    test the C# console
+                  </button>{" "}
+                  without credentials.
+                </>
+              ) : undefined
+            }
+            streaming={busy}
+            canAbort={busy}
+            abortDisabled={pending || !hostOnline}
+            onAbort={() => void cancel()}
+            controls={
+              <>
+                <ModelControls
+                  connected={hostOnline && !!state}
+                  providers={state?.providers ?? []}
+                  selected={
+                    state?.settings ?? { provider: "", model: "" }
+                  }
+                  onSelectModel={(provider, model) =>
+                    void selectModel(provider, model)
+                  }
+                  onManageProvider={openSettings}
+                />
+                <DocumentTarget label={doc?.title ?? "No document"} />
+              </>
+            }
+          />
         </main>
+        <ExecutionHistory operations={operations} />
+
+        {consoleOpen && (
+          <Dialog
+            open
+            onOpenChange={(next) => {
+              if (!next) setConsoleOpen(false);
+            }}
+          >
+            <DialogContent
+              aria-labelledby="console-title"
+              className="w-[min(680px,calc(100%-2rem))] gap-3"
+            >
+              <DialogHeader>
+                <DialogTitle id="console-title">Run a C# method body</DialogTitle>
+                <DialogDescription>
+                  The same executor the assistant uses. No model or API key
+                  required. Access the current document through{" "}
+                  <code className="rounded-[3px] bg-surface-muted px-1 py-0.5 font-mono text-[0.9em]">
+                    ctx.Doc
+                  </code>
+                  .
+                </DialogDescription>
+              </DialogHeader>
+              <ConsolePanel
+                code={code}
+                onCodeChange={setCode}
+                mode={mode}
+                onModeChange={setMode}
+                busy={busy}
+                pending={pending}
+                canRun={canExecute}
+                onRun={() => void executeSnippet()}
+                onCancel={() => void cancel()}
+                docReadOnly={!!doc?.isReadOnly}
+              />
+            </DialogContent>
+          </Dialog>
+        )}
 
         {settingsOpen && state && (
           <ProviderDialog
