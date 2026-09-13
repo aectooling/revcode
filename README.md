@@ -131,7 +131,7 @@ The browser's **Screenshot** button captures locally without taking focus or sen
 
 The host journals intent/receipts separately from C# operations, retains only the latest desktop PNG, and requires fresh observations across turns. New Pi sessions run in memory, avoiding duplicate screenshot files and synchronous image-log writes; the host text journal supplies conversation continuity. Existing session logs from older versions are not deleted. The helper is bound to Revit PID plus process-start identity and uses a user/session input mutex. It never elevates or kills Revit.
 
-Desktop control is **experimental**: visible-region GDI capture is implemented; WGC comparison and live Revit workflow validation remain pending. Input requires an active, unlocked Windows session (console or connected Remote Desktop) and matching integrity levels. Cross-process dialogs, arbitrary popup targeting, and dialogs raised by a still-running API call are unsupported. See [desktop protocol and limits](docs/DESKTOP-PROTOCOL.md).
+Desktop control is **experimental**: visible-region GDI capture is implemented; WGC comparison and live Revit workflow validation remain pending. The first UI observation restores and brings Revit forward automatically, waiting for focus before capture. Switching away during control pauses the workflow. Input requires an active, unlocked Windows session (console or connected Remote Desktop) and matching integrity levels. Cross-process dialogs, arbitrary popup targeting, and dialogs raised by a still-running API call are unsupported. See [desktop protocol and limits](docs/DESKTOP-PROTOCOL.md).
 
 ## Atomic edit batches
 

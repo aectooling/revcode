@@ -10,5 +10,6 @@
     <Compile Include="../Revcode.Desktop/Protocol.cs" Link="DesktopProtocol.cs" />
     <Compile Include="../Revcode.Desktop/Win32.cs" Link="DesktopWin32.cs" />
     <Compile Include="../Revcode.Desktop/InputPolicy.cs" Link="DesktopInputPolicy.cs" />
+    <Compile Include="../Revcode.Desktop/FocusHandoff.cs" Link="DesktopFocusHandoff.cs" />
   </ItemGroup>
 </Project>

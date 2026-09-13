@@ -33,6 +33,8 @@ internal static class Win32
     [DllImport("user32.dll")] internal static extern nint GetAncestor(nint window, uint flags);
     [DllImport("user32.dll")] internal static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(nint window);
+    [DllImport("user32.dll")] internal static extern bool ShowWindowAsync(nint window, int command);
+    [DllImport("user32.dll")] internal static extern nint GetLastActivePopup(nint window);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(nint window);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);

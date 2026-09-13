@@ -109,7 +109,7 @@ internal sealed class DesktopSession : IDisposable
 
     private object Start()
     {
-        if (!inputEnabled) throw new InvalidOperationException("Manual spike input requires --enable-input. Model integration is not enabled.");
+        if (!inputEnabled) throw new InvalidOperationException("Desktop input requires --enable-input.");
         if (owned) return new { status = "owned" };
         policy.Resume();
         if (!Win32.Interactive()) throw new InvalidOperationException("Desktop control requires an active, unlocked Windows session. Unlock or reconnect the session running Revit (console or Remote Desktop).");
@@ -121,16 +121,33 @@ internal sealed class DesktopSession : IDisposable
         {
             hotkey = Win32.RegisterHotKey(messageWindow, 1, Win32.HotkeyControlAltNoRepeat, Win32.KeyF12);
             if (!hotkey) throw new InvalidOperationException("Could not register Ctrl+Alt+F12 emergency Stop.");
-            var windows = Windows(); var foreground = Win32.GetForegroundWindow();
-            var selected = windows.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground) ?? windows.LastOrDefault() ?? throw new InvalidOperationException("No Revit window.");
-            var window = Resolve(selected.WindowRef, windows);
-            if (Win32.IsIconic(window)) throw new InvalidOperationException("Restore Revit before starting.");
-            if (foreground != window) Win32.SetForegroundWindow(window);
-            if (Win32.GetForegroundWindow() != window) throw new InvalidOperationException("Focus refused. Activate Revit, then start again.");
             heartbeat.Restart(); inactivity.Restart(); observation = null;
+            target.Refresh(); var main = target.MainWindowHandle;
+            if (main == 0) throw new InvalidOperationException("No Revit window.");
+            if (Win32.IsIconic(main)) WaitForFocus(main, () => Win32.ShowWindowAsync(main, 9), () => !Win32.IsIconic(main));
+            var windows = Windows(); var foreground = Win32.GetForegroundWindow();
+            var popup = Win32.GetLastActivePopup(main);
+            var enabled = windows.Where(w => Win32.IsWindowEnabled(Resolve(w.WindowRef, windows))).ToArray();
+            var selected = enabled.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground)
+                ?? enabled.FirstOrDefault(w => Resolve(w.WindowRef, windows) == popup)
+                ?? enabled.FirstOrDefault() ?? throw new InvalidOperationException("No enabled Revit window. Close the blocking dialog and retry.");
+            var window = Resolve(selected.WindowRef, windows);
+            WaitForFocus(window, () => Win32.SetForegroundWindow(window), () => Win32.GetForegroundWindow() == window && !Win32.IsIconic(window) && Win32.IsWindowEnabled(window));
             return new { status = "owned" };
         }
         catch { Stop(); throw; }
+    }
+
+    private void WaitForFocus(nint window, Action request, Func<bool> ready)
+    {
+        var elapsed = Stopwatch.StartNew();
+        FocusHandoff.Run(request, ready, () =>
+        {
+            CheckIdentity();
+            if (!LeaseReady) throw new InvalidOperationException("Desktop activation stopped.");
+            if (!Win32.Interactive() || Win32.Pid(window) != target.Id || HumanHeldInput())
+                throw new InvalidOperationException("Desktop or input changed while activating Revit. Retry after releasing held keys/buttons.");
+        }, Application.DoEvents, () => Thread.Sleep(25), () => elapsed.Elapsed >= TimeSpan.FromSeconds(2));
     }
 
     private Observation Observe(Request request)
