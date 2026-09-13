@@ -15,6 +15,8 @@ npm ci
 npm run build:install
 ```
 
+For pnpm, run `pnpm install --frozen-lockfile` followed by `pnpm run build` (host and browser) or `pnpm run build:install` (the full add-in). The checked-in pnpm workspace configuration allows the required esbuild and ZeroMQ install scripts and skips optional dependency scripts.
+
 `build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. Options follow after ` -- ` (npm does not pass dashed flags): `npm run build:install -- open-revit` reopens Revit after installation, `-- build-only` builds and verifies the package without installing, and `-- revit-years 2025,2026` selects versions. When calling Node directly, dashed forms also work: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
 
 Close Revit before installation. The installer registers a per-user add-in and copies a versioned package under `%LOCALAPPDATA%\Revcode\packages`. It does not require administrator privileges. Revit may show its standard unsigned add-in prompt on first load.
