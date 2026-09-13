@@ -112,7 +112,7 @@ internal sealed class DesktopSession : IDisposable
         if (!inputEnabled) throw new InvalidOperationException("Manual spike input requires --enable-input. Model integration is not enabled.");
         if (owned) return new { status = "owned" };
         policy.Resume();
-        if (!Win32.Interactive()) throw new InvalidOperationException("An unlocked local interactive desktop is required; remote sessions are unsupported.");
+        if (!Win32.Interactive()) throw new InvalidOperationException("Desktop control requires an active, unlocked Windows session. Unlock or reconnect the session running Revit (console or Remote Desktop).");
         using var self = Process.GetCurrentProcess();
         if (Win32.Integrity(target) != Win32.Integrity(self)) throw new InvalidOperationException("Target integrity differs from helper; elevation is not attempted.");
         try { owned = lease.WaitOne(0); } catch (AbandonedMutexException) { owned = true; }
@@ -136,7 +136,7 @@ internal sealed class DesktopSession : IDisposable
     private Observation Observe(Request request)
     {
         observation = null;
-        if (!Win32.Interactive()) throw new InvalidOperationException("Capture requires an unlocked local desktop.");
+        if (!Win32.Interactive()) throw new InvalidOperationException("Capture requires an active, unlocked Windows session. Unlock or reconnect the session running Revit (console or Remote Desktop).");
         var windows = Windows();
         var foreground = Win32.GetForegroundWindow();
         var selected = request.WindowRef != null ? windows.SingleOrDefault(w => w.WindowRef == request.WindowRef) : windows.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground) ?? windows.LastOrDefault();

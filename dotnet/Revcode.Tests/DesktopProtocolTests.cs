@@ -5,6 +5,30 @@ namespace Revcode.Tests;
 
 public class DesktopProtocolTests
 {
+    [Theory]
+    [InlineData(0, 2u, 1u, true)] // Active RDP.
+    [InlineData(0, 1u, 1u, true)] // Active console.
+    [InlineData(4, 2u, 1u, false)] // Disconnected RDP.
+    [InlineData(4, 1u, 1u, false)] // A known non-active state never falls back.
+    [InlineData(null, 1u, 1u, true)] // Console without Remote Desktop Services.
+    [InlineData(null, 2u, 1u, false)] // Unknown remote state fails closed.
+    [InlineData(null, 1u, uint.MaxValue, false)] // No attached console.
+    public void ConnectionAllowsActiveRdpAndConsoleFallback(int? state, uint sessionId, uint consoleSessionId, bool expected)
+    {
+        Assert.Equal(expected, Win32.SessionConnected(state, sessionId, consoleSessionId));
+    }
+
+    [Theory]
+    [InlineData("Default", "Default", true)]
+    [InlineData("Default", "Winlogon", false)] // Locked/secure desktop.
+    [InlineData("Default", null, false)] // Access denied/query failed.
+    [InlineData(null, "Default", false)]
+    [InlineData("", "", false)]
+    public void DesktopAccessRequiresMatchingAccessibleInputDesktop(string? threadDesktop, string? inputDesktop, bool expected)
+    {
+        Assert.Equal(expected, Win32.OnInputDesktop(threadDesktop, inputDesktop));
+    }
+
     [Fact]
     public void InputLayoutMatchesWindowsX64Abi()
     {

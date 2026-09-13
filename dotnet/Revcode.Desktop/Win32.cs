@@ -43,7 +43,12 @@ internal static class Win32
     [DllImport("user32.dll", SetLastError = true)] internal static extern bool RegisterHotKey(nint window, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] internal static extern bool UnregisterHotKey(nint window, int id);
     [DllImport("user32.dll", SetLastError = true)] private static extern nint OpenInputDesktop(uint flags, bool inherit, uint access);
-    [DllImport("user32.dll")] private static extern bool SwitchDesktop(nint desktop);
+    [DllImport("user32.dll")] private static extern nint GetThreadDesktop(uint threadId);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] private static extern uint WTSGetActiveConsoleSessionId();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetUserObjectInformation(nint handle, int index, StringBuilder data, uint length, out uint needed);
+    [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode)] private static extern bool WTSQuerySessionInformation(nint server, int sessionId, int infoClass, out nint buffer, out int bytes);
+    [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(nint buffer);
     [DllImport("user32.dll")] private static extern bool CloseDesktop(nint desktop);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(nint process, uint access, out nint token);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(nint token, int kind, nint data, int size, out int required);
@@ -53,10 +58,38 @@ internal static class Win32
 
     internal static bool Interactive()
     {
-        var desktop = OpenInputDesktop(0, false, 0x100);
+        // WTSActive applies to both the console and connected RDP sessions. A
+        // disconnected session can still expose its previous input desktop.
+        int? state = null;
+        if (WTSQuerySessionInformation(0, -1, 8, out var buffer, out var bytes))
+        {
+            try { if (buffer == 0 || bytes < sizeof(int)) return false; state = Marshal.ReadInt32(buffer); }
+            finally { WTSFreeMemory(buffer); }
+        }
+        using var self = Process.GetCurrentProcess();
+        if (!SessionConnected(state, (uint)self.SessionId, WTSGetActiveConsoleSessionId())) return false;
+        var desktop = OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS
         if (desktop == 0) return false;
-        try { return SwitchDesktop(desktop) && GetSystemMetrics(0x1000) == 0; }
+        try { return OnInputDesktop(DesktopName(GetThreadDesktop(GetCurrentThreadId())), DesktopName(desktop)); }
         finally { CloseDesktop(desktop); }
+    }
+
+    // WTS queries fail when Remote Desktop Services is stopped. Only an attached
+    // physical console may fall back; remote sessions still require WTSActive.
+    internal static bool SessionConnected(int? state, uint sessionId, uint consoleSessionId) =>
+        state == 0 || (state == null && consoleSessionId != uint.MaxValue && sessionId == consoleSessionId);
+
+    // A locked/secure desktop must not authorize input on the helper's desktop.
+    // Query names instead of activating a desktop as part of this check.
+    internal static bool OnInputDesktop(string? threadDesktop, string? inputDesktop) =>
+        !string.IsNullOrEmpty(threadDesktop) &&
+        string.Equals(threadDesktop, inputDesktop, StringComparison.OrdinalIgnoreCase);
+
+    private static string? DesktopName(nint desktop)
+    {
+        var name = new StringBuilder(256);
+        return desktop != 0 && GetUserObjectInformation(desktop, 2, name, (uint)(name.Capacity * sizeof(char)), out _)
+            ? name.ToString() : null;
     }
 
     internal static int Integrity(Process process)
