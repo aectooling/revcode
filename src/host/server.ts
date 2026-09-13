@@ -5,12 +5,14 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import type { Agent, AuthState, Context, ExecuteInput, Message, Operation, Settings } from './types.js';
 import { Router } from 'zeromq';
+import { DesktopController } from './desktop-controller.js';
+import type { DesktopTransport } from './desktop-types.js';
 
 const terminal = new Set(['succeeded', 'failed', 'cancelled']);
 const statuses = new Set(['compiling', 'queued', 'running', ...terminal, 'unknown']);
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 interface Persisted { messages: Message[]; operations: Operation[]; requests: Record<string, { fingerprint: string; response: object }>; settings: Settings }
-export interface HostOptions { instanceId: string; nativeToken: string; dataDir: string; webDir: string; agent: Agent; heartbeatMs?: number; userDir?: string }
+export interface HostOptions { instanceId: string; nativeToken: string; dataDir: string; webDir: string; agent: Agent; heartbeatMs?: number; userDir?: string; desktop?: DesktopTransport }
 
 export async function createHost(options: HostOptions) {
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
@@ -22,6 +24,8 @@ export async function createHost(options: HostOptions) {
   try { state.settings = JSON.parse(await readFile(settingsFile, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
   for (const op of state.operations) if (!terminal.has(op.status)) { op.status = 'unknown'; op.error = 'Host restarted before a confirmed native outcome. Do not replay this operation.'; }
   let context: Context | null = null, lastHeartbeat = 0, chatBusy = false;
+  let turnAbort: AbortController | undefined;
+  let cancellationEpoch = 0;
   let auth: AuthState = { busy: false, completedCount: 0 };
   let authController: AbortController | undefined;
   let authResponse: { id: string; resolve: (value: string) => void; reject: (error: Error) => void } | undefined;
@@ -41,14 +45,24 @@ export async function createHost(options: HostOptions) {
   };
   await persist();
   const connected = () => lastHeartbeat > 0 && Date.now() - lastHeartbeat < (options.heartbeatMs ?? 10000);
-  const busy = () => chatBusy || state.operations.some(o => !terminal.has(o.status));
+  const busy = () => chatBusy || desktop.inFlight || desktop.fenced || state.operations.some(o => !terminal.has(o.status));
   const snapshot = () => ({ instanceId: options.instanceId, context, connected: connected(), busy: busy(), auth, ...state, requests: undefined,
-    operations: state.operations.slice(-100), messages: state.messages.slice(-200), settings: { ...state.settings, configured: options.agent.configured(state.settings.provider) }, providers: options.agent.providers });
+    desktop: desktop.snapshot(), operations: state.operations.slice(-100), messages: state.messages.slice(-200), settings: { ...state.settings, configured: options.agent.configured(state.settings.provider) }, providers: options.agent.providers });
   let broadcastTimer: NodeJS.Timeout | undefined;
   const broadcast = () => { if (broadcastTimer || events.size === 0) return; broadcastTimer = setTimeout(() => {
     broadcastTimer = undefined; const data = `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`;
     for (const res of events) { if (res.writableLength > 1024 * 1024) { res.end(); events.delete(res); } else res.write(data); }
   }, 50); };
+  const desktop = new DesktopController(options.desktop, options.dataDir, token => {
+    if (!connected()) throw new Error('Revit is disconnected.');
+    if (state.operations.some(op => !terminal.has(op.status))) throw new Error('An API operation is pending or unknown. Desktop input is blocked; use the read-only screenshot control.');
+    if ((context?.document?.token ?? null) !== token) throw new Error('Active document changed during this desktop workflow. Start a new turn.');
+  }, broadcast, () => { turnAbort?.abort(); void options.agent.abort().catch(() => {}); }, () => ({
+    documentToken: context?.document?.token ?? null, documentTitle: context?.document?.title, capturedAt: context?.capturedAt,
+    ageMs: context?.capturedAt && Number.isFinite(Date.parse(context.capturedAt)) ? Math.max(0, Date.now() - Date.parse(context.capturedAt)) : undefined,
+    source: 'cached-native-context',
+  }));
+  await desktop.init();
   const send = (res: ServerResponse, status: number, body?: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(body === undefined ? undefined : JSON.stringify(body)); };
   let sendChain = Promise.resolve();
   const dispatch = (command: object) => {
@@ -59,6 +73,8 @@ export async function createHost(options: HostOptions) {
     });
   };
   const markDisconnected = async () => {
+    turnAbort?.abort();
+    void desktop.stop().catch(() => {});
     lastHeartbeat = 0;
     nativeRoute = undefined;
     for (const op of state.operations) if (!terminal.has(op.status) && op.status !== 'unknown') {
@@ -73,6 +89,7 @@ export async function createHost(options: HostOptions) {
   };
   const checkDocument = () => {
     if (!connected()) throw new HttpError(409, 'Revit is disconnected.');
+    if (desktop.inFlight || desktop.fenced) throw new HttpError(409, 'Desktop input is pending or its outcome is unknown.');
     if (state.operations.some(o => !terminal.has(o.status))) throw new HttpError(409, 'An operation is pending or its outcome is unknown.');
     return context?.document;
   };
@@ -91,7 +108,12 @@ export async function createHost(options: HostOptions) {
   };
   const execute = async (input: ExecuteInput, signal?: AbortSignal): Promise<Operation> => {
     if (signal?.aborted) throw new Error('Cancelled');
+    desktop.invalidateObservation();
     const op = await createOperation(input);
+    if (signal?.aborted) {
+      op.status = 'cancelled'; op.error = 'Cancelled before native dispatch.';
+      await persist(); broadcast(); return op;
+    }
     const waiting = new Promise<Operation>((resolve, reject) => waiters.set(op.operationId, { resolve, reject }));
     const cancel = () => dispatch({ kind: 'cancel', operationId: op.operationId });
     signal?.addEventListener('abort', cancel, { once: true });
@@ -117,7 +139,7 @@ export async function createHost(options: HostOptions) {
   };
   // Serialize state-changing requests across asynchronous disk writes.
   let mutationChain = Promise.resolve();
-  async function mutate(req: IncomingMessage, res: ServerResponse, path: string) {
+  async function mutate(req: IncomingMessage, res: ServerResponse, path: string, submissionEpoch: number) {
     const data = await body(req);
     if (path === '/api/auth/respond') {
       if (!authResponse || data.requestId !== authResponse.id || typeof data.value !== 'string' || data.value.length > 16384) throw new HttpError(400, 'This sign-in prompt is no longer active.');
@@ -187,11 +209,8 @@ export async function createHost(options: HostOptions) {
       await writeFile(tempSettings, JSON.stringify(state.settings), { mode: 0o600 }); await rename(tempSettings, settingsFile);
       await persist(); send(res, 200, state.settings); broadcast(); return;
     }
-    if (path === '/api/cancel') {
-      for (const op of state.operations) if (!terminal.has(op.status)) dispatch({ kind: 'cancel', operationId: op.operationId });
-      void options.agent.abort().catch(() => {}); send(res, 200, { ok: true }); return;
-    }
     if (path === '/api/execute' || path === '/api/chat') {
+      if (submissionEpoch !== cancellationEpoch) throw new HttpError(409, 'Request cancelled before acceptance.');
       const { old, fingerprint } = dedup(data);
       if (old) { send(res, 202, old.response); return; }
       if (busy() || auth.busy) throw new HttpError(409, 'Revcode is busy or awaiting an uncertain outcome.');
@@ -200,6 +219,10 @@ export async function createHost(options: HostOptions) {
         const op = await createOperation(validate(data));
         const response = { operationId: op.operationId };
         state.requests[data.requestId] = { fingerprint, response }; await persist();
+        if (submissionEpoch !== cancellationEpoch) {
+          op.status = 'cancelled'; op.error = 'Cancelled before native dispatch.';
+          await persist(); send(res, 202, response); broadcast(); return;
+        }
         dispatch({ kind: 'execute', ...op }); send(res, 202, response); broadcast(); return;
       }
       if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 32000) throw new HttpError(400, 'Message must contain 1–32000 characters.');
@@ -209,12 +232,26 @@ export async function createHost(options: HostOptions) {
       const history = [...state.messages];
       state.messages.push({ id: randomUUID(), role: 'user', text: data.text });
       const message: Message = { id: randomUUID(), role: 'assistant', text: '' }; state.messages.push(message);
+      const controller = new AbortController(); turnAbort = controller;
       chatBusy = true; await persist(); send(res, 202, response); broadcast();
+      if (controller.signal.aborted || submissionEpoch !== cancellationEpoch) {
+        message.text = 'Cancelled before the agent started.';
+        chatBusy = false; turnAbort = undefined; await persist(); broadcast(); return;
+      }
       const boundContext = structuredClone(context!);
+      const desktopTools = desktop.beginTurn(boundContext.document?.token ?? null);
+      const withTurnSignal = (signal?: AbortSignal) => signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      const turnId = randomUUID();
       void options.agent.prompt(data.text, state.settings, boundContext, history, async (input, signal) => {
         if (context?.document?.token !== boundContext.document?.token) throw new Error('Active document changed during this turn. Start a new turn.');
-        return execute(input, signal);
-      }, text => { message.text = text.slice(0, 200000); broadcast(); }).catch(error => { message.text += `\n${error instanceof Error ? error.message : 'Agent failed'}`; }).finally(async () => { chatBusy = false; await persist(); broadcast(); });
+        return execute(input, withTurnSignal(signal));
+      }, text => { message.text = text.slice(0, 200000); broadcast(); }, {
+        observe: (input, signal) => desktopTools.observe(input, withTurnSignal(signal)),
+        action: (id, input, signal) => desktopTools.action(`${turnId}:${id}`, input, withTurnSignal(signal)),
+      }).catch(error => { message.text += `\n${error instanceof Error ? error.message : 'Agent failed'}`; }).finally(async () => {
+        try { await desktop.endTurn(); } catch { /* Helper disconnect is already fenced. */ }
+        chatBusy = false; turnAbort = undefined; await persist(); broadcast();
+      });
       return;
     }
     throw new HttpError(404, 'Not found.');
@@ -227,19 +264,38 @@ export async function createHost(options: HostOptions) {
       if (path.startsWith('/api/')) {
         if (!authorized(req, browserToken)) throw new HttpError(401, 'Unauthorized.');
         if (req.method === 'GET' && path === '/api/state') { send(res, 200, snapshot()); return; }
+        if (req.method === 'GET' && path.startsWith('/api/desktop/image/')) {
+          const content = await desktop.image(path.slice('/api/desktop/image/'.length));
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(content); return;
+        }
         if (req.method === 'GET' && path === '/api/events') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
           events.add(res); res.on('close', () => events.delete(res)); res.write(`event: state\ndata: ${JSON.stringify(snapshot())}\n\n`); return;
         }
         if (req.method !== 'POST') throw new HttpError(404, 'Not found.');
-        const work = mutationChain.then(() => mutate(req, res, path)); mutationChain = work.catch(() => {}); await work; return;
+        // Stop and read-only capture must not wait behind native mutation/disk work.
+        if (path === '/api/cancel' || path === '/api/desktop/stop') {
+          ++cancellationEpoch;
+          turnAbort?.abort();
+          void desktop.stop().catch(() => {});
+          for (const op of state.operations) if (!terminal.has(op.status)) dispatch({ kind: 'cancel', operationId: op.operationId });
+          void options.agent.abort().catch(() => {}); send(res, 200, { ok: true }); return;
+        }
+        if (path === '/api/desktop/observe') {
+          const input = await body(req);
+          try { const { data: _, ...evidence } = await desktop.observePassive(input); send(res, 200, evidence); }
+          catch (error) { send(res, 409, { error: (error as Error).message }); }
+          return;
+        }
+        const submissionEpoch = cancellationEpoch;
+        const work = mutationChain.then(() => mutate(req, res, path, submissionEpoch)); mutationChain = work.catch(() => {}); await work; return;
       }
       if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
       const root = resolve(options.webDir); const file = resolve(root, '.' + decodeURIComponent(path === '/' ? '/index.html' : path));
       if (!file.startsWith(root + sep)) throw new HttpError(403, 'Invalid path.');
       const content = await readFile(file).catch(() => { throw new HttpError(404, 'UI asset not found. Run npm run build.'); });
       const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
-      res.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" }); res.end(content);
+      res.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-ancestors 'none'" }); res.end(content);
     } catch (error) { if (!res.headersSent) send(res, error instanceof HttpError ? error.status : 500, { error: error instanceof HttpError ? error.message : 'Internal host error. Check installation and data directory.' }); else res.end(); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -257,6 +313,9 @@ export async function createHost(options: HostOptions) {
         const work = mutationChain.then(async () => {
           if (envelope.type === 'context') {
             if (data?.instanceId !== options.instanceId || (data.document !== null && typeof data.document?.token !== 'string')) return;
+            if (chatBusy && context?.document?.token !== data.document?.token) {
+              turnAbort?.abort(); void desktop.stop().catch(() => {}); void options.agent.abort().catch(() => {});
+            }
             context = data; lastHeartbeat = Date.now(); nativeRoute = route;
             while (queue.length) dispatch(queue.shift()!); broadcast();
           } else if (envelope.type === 'disconnect') { await markDisconnected(); }
@@ -277,5 +336,5 @@ export async function createHost(options: HostOptions) {
   const heartbeat = setInterval(() => {
     const work = mutationChain.then(async () => { if (lastHeartbeat && !connected()) await markDisconnected(); }); mutationChain = work.catch(() => {});
   }, 1000); heartbeat.unref();
-  return { url, nativeEndpoint, browserToken, snapshot, close: async () => { authController?.abort(); clearInterval(heartbeat); clearTimeout(broadcastTimer); for (const waiter of waiters.values()) waiter.reject(new Error('Host closed')); await options.agent.abort(); for (const res of events) res.end(); router.close(); await saveChain; server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+  return { url, nativeEndpoint, browserToken, snapshot, close: async () => { authController?.abort(); turnAbort?.abort(); clearInterval(heartbeat); clearTimeout(broadcastTimer); for (const waiter of waiters.values()) waiter.reject(new Error('Host closed')); await options.agent.abort(); await desktop.close().catch(() => {}); for (const res of events) res.end(); router.close(); await saveChain; server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }

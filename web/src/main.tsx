@@ -28,6 +28,8 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
 import mark from "./assets/revcode-mark.svg";
 import { TriangleAlert } from "lucide-react";
+import { DesktopPanel } from './components/desktop-panel';
+import type { DesktopState } from '../../src/host/desktop-types';
 
 type HostState = {
   instanceId: string;
@@ -39,6 +41,7 @@ type HostState = {
   settings: Settings;
   providers: ProviderSummary[];
   auth?: AuthState;
+  desktop?: DesktopState;
 };
 
 function readToken() {
@@ -63,6 +66,12 @@ function readToken() {
   }
 }
 let token = readToken();
+
+async function loadDesktopImage(artifact: string, signal: AbortSignal) {
+  const response = await fetch(`/api/desktop/image/${encodeURIComponent(artifact)}`, { headers: { Authorization: `Bearer ${token}` }, signal });
+  if (!response.ok) throw new Error('Screenshot expired. Capture again.');
+  return response.blob();
+}
 
 async function api<T>(
   path: string,
@@ -374,6 +383,10 @@ function App() {
               </span>
             </div>
           )}
+          <DesktopPanel state={state?.desktop} online={hostOnline}
+            vision={!!state?.providers.find(provider => provider.id === state.settings.provider)?.models.find(model => model.id === state.settings.model)?.supportsImages}
+            capture={async () => { await api('/api/desktop/observe', {}); }}
+            stop={async () => { await api('/api/desktop/stop', {}); }} loadImage={loadDesktopImage} />
           <Conversation
             messages={state?.messages ?? []}
             busy={busy}

@@ -47,6 +47,8 @@ try {
     Copy-Item -LiteralPath $nodeLicense -Destination (Join-Path $runtimeOutput 'NODE-LICENSE.txt')
 
     Invoke-Checked 'dotnet' @('publish', 'dotnet/Revcode.Compiler/Revcode.Compiler.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-o', (Join-Path $packageRoot 'compiler'))
+    Invoke-Checked 'dotnet' @('publish', 'dotnet/Revcode.Desktop/Revcode.Desktop.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-o', (Join-Path $packageRoot 'desktop'))
+    if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'desktop/Revcode.Desktop.exe'))) { throw 'Missing desktop helper.' }
     foreach ($year in $RevitYears) {
         $addinOutput = Join-Path $packageRoot "addin\$year"
         Invoke-Checked 'dotnet' @('publish', 'dotnet/Revcode.Revit/Revcode.Revit.csproj', '-c', 'Release', "-p:RevitYear=$year", '-o', $addinOutput)
@@ -58,6 +60,7 @@ try {
         nodePath = 'runtime/node.exe'
         hostPath = 'dist/host/index.js'
         compilerPath = 'compiler/Revcode.Compiler.exe'
+        desktopPath = 'desktop/Revcode.Desktop.exe'
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'runtime.json') -Encoding UTF8
     [ordered]@{
         version = $packageVersion

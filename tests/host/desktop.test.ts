@@ -1,0 +1,151 @@
+import { afterEach, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DesktopController, validateAction, validateObserve } from '../../src/host/desktop-controller.js';
+import { DesktopRequestError } from '../../src/host/desktop-client.js';
+import type { DesktopObservation, DesktopTransport } from '../../src/host/desktop-types.js';
+
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
+async function setup() {
+  const dir = await mkdtemp(join(tmpdir(), 'revcode-desktop-'));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const calls: { kind: string; input?: any; id?: string }[] = [];
+  let guardError = '', actionError: Error | undefined, captureError = false, stops = 0, interruptions = 0;
+  let releaseCapture: (() => void) | undefined;
+  let blockCapture = false;
+  const transport: DesktopTransport = {
+    request: async (kind, input, id) => {
+      calls.push({ kind, input, id });
+      if (kind === 'action') {
+        const saved = JSON.parse(await readFile(join(dir, 'desktop/journal.json'), 'utf8'));
+        expect(saved.at(-1).receipt.status).toBe('unknown'); // intent precedes input
+        if (actionError) throw actionError;
+        return { status: 'dispatched', inserted: 3 };
+      }
+      if (kind === 'observe') {
+        if (blockCapture) await new Promise<void>(resolve => { releaseCapture = resolve; });
+        if (captureError) throw new DesktopRequestError('Capture unavailable.');
+        return { observationId: randomUUID().replaceAll('-', ''), windowRef: 'b'.repeat(32), title: 'Revit', timestamp: new Date().toISOString(),
+          bounds: { x: 0, y: 0, width: 1, height: 1 }, crop: { x: 0, y: 0, width: 1, height: 1 }, width: 1, height: 1, dpi: 96,
+          windows: [], actionable: true, backend: 'fixture', mimeType: 'image/png', data: png } satisfies DesktopObservation;
+      }
+      return { status: 'owned' };
+    }, stop: async () => { stops++; }, close: async () => {},
+  };
+  const controller = new DesktopController(transport, dir, () => { if (guardError) throw new Error(guardError); }, () => {}, () => { interruptions++; });
+  await controller.init(); cleanup.push(() => controller.close().catch(() => {}));
+  return { controller, transport, dir, calls, tools: controller.beginTurn('doc'),
+    guard: (error: string) => { guardError = error; }, failAction: (error: Error) => { actionError = error; },
+    failCapture: () => { captureError = true; }, block: () => { blockCapture = true; }, release: () => releaseCapture?.(),
+    stops: () => stops, interruptions: () => interruptions };
+}
+
+it('starts once per turn, delivers PNGs, journals before input, and deduplicates action IDs', async () => {
+  const fixture = await setup();
+  const image = await fixture.tools.observe({});
+  expect(image.data).toBe(png);
+  const input = { observationId: image.observationId, action: 'click' as const, x: 0, y: 0 };
+  const result = await fixture.tools.action('tool-call', input);
+  expect(result.receipt.status).toBe('dispatched'); expect(result.observation?.data).toBe(png);
+  expect(await fixture.tools.action('tool-call', input)).toEqual({ receipt: result.receipt });
+  await expect(fixture.tools.action('tool-call', { ...input, x: 1 })).rejects.toThrow('different input');
+  expect(fixture.calls.filter(call => call.kind === 'start')).toHaveLength(1);
+  expect(fixture.calls.filter(call => call.kind === 'action')).toHaveLength(1);
+  const state = fixture.controller.snapshot();
+  expect(JSON.stringify(state)).not.toContain(png);
+  expect(await fixture.controller.image(state.latest!.artifact)).toEqual(Buffer.from(png, 'base64'));
+});
+
+it('allows passive recovery capture while native input is fenced, without taking focus', async () => {
+  const fixture = await setup(); fixture.guard('API outcome unknown');
+  const image = await fixture.controller.observePassive();
+  expect(image.actionable).toBe(false);
+  expect(fixture.calls.map(call => call.kind)).toEqual(['observe']);
+  await expect(fixture.tools.observe({})).rejects.toThrow('API outcome unknown');
+});
+
+it('blocks action when active document changes after observation', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({});
+  fixture.guard('Active document changed');
+  await expect(fixture.tools.action('action', { observationId: image.observationId, action: 'key', keys: ['ESC'] })).rejects.toThrow('Active document changed');
+  expect(fixture.calls.some(call => call.kind === 'action')).toBe(false);
+});
+
+it('Stop during capture prevents subsequent input and releases ownership immediately', async () => {
+  const fixture = await setup(); fixture.block();
+  const capture = fixture.tools.observe({});
+  const rejection = expect(capture).rejects.toThrow('stopped');
+  await expect.poll(() => fixture.calls.some(call => call.kind === 'observe')).toBe(true);
+  await fixture.controller.stop(); expect(fixture.stops()).toBeGreaterThan(0);
+  fixture.release(); await rejection;
+  await expect(fixture.tools.action('action', { observationId: 'a'.repeat(32), action: 'key', keys: ['ESC'] })).rejects.toThrow('stopped');
+});
+
+it('transport failure persists unknown input and blocks API mutations even after host restart', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({});
+  fixture.failAction(new Error('Disconnected after possible dispatch'));
+  const result = await fixture.tools.action('action', { observationId: image.observationId, action: 'click', x: 0, y: 0 });
+  expect(result.receipt.status).toBe('unknown'); expect(fixture.controller.fenced).toBe(true);
+  expect(result.observation?.actionable).toBe(false);
+  const restarted = new DesktopController(fixture.transport, fixture.dir, () => {}, () => {});
+  await restarted.init(); expect(restarted.fenced).toBe(true);
+  await expect(restarted.beginTurn('doc').observe({})).rejects.toThrow('confirmed outcome');
+});
+
+it('helper validation refusal is confirmed non-dispatch, while capture failure preserves a successful receipt', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({});
+  fixture.failAction(new DesktopRequestError('Stale image'));
+  const refused = await fixture.tools.action('refused', { observationId: image.observationId, action: 'click', x: 0, y: 0 });
+  expect(refused.receipt.status).toBe('not-dispatched'); expect(fixture.controller.fenced).toBe(false);
+});
+
+it('post-action screenshot failure cannot erase dispatch or permit replay', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({}); fixture.failCapture();
+  const input = { observationId: image.observationId, action: 'click' as const, x: 0, y: 0 };
+  const result = await fixture.tools.action('action', input);
+  expect(result.receipt.status).toBe('dispatched'); expect(result.captureError).toContain('Capture unavailable');
+  expect(await fixture.tools.action('action', input)).toEqual({ receipt: result.receipt });
+  expect(fixture.calls.filter(call => call.kind === 'action')).toHaveLength(1);
+});
+
+it('a lost lease aborts the workflow instead of reacquiring focus', async () => {
+  const fixture = await setup(); await fixture.tools.observe({});
+  fixture.transport.onState?.({ owned: false, unknown: false });
+  expect(fixture.interruptions()).toBe(1);
+  await expect(fixture.tools.observe({})).rejects.toThrow('stopped');
+  expect(fixture.calls.filter(call => call.kind === 'start')).toHaveLength(1);
+});
+
+it('journal failure remains fenced even if the helper subsequently exits', async () => {
+  const fixture = await setup(); const image = await fixture.tools.observe({});
+  const request = fixture.transport.request;
+  fixture.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'action') await mkdir(join(fixture.dir, 'desktop/journal.json.tmp'));
+    return result;
+  };
+  await expect(fixture.tools.action('action', { observationId: image.observationId, action: 'click', x: 0, y: 0 })).rejects.toThrow();
+  expect(fixture.controller.fenced).toBe(true);
+  fixture.transport.onState?.({ owned: false, unknown: true, error: 'Helper exited' });
+  expect(fixture.controller.fenced).toBe(true);
+});
+
+it('rejects concurrent requests and old observation IDs', async () => {
+  const fixture = await setup(); const old = await fixture.tools.observe({}); await fixture.tools.observe({});
+  await expect(fixture.tools.action('old', { observationId: old.observationId, action: 'click', x: 0, y: 0 })).rejects.toThrow('Observe');
+  fixture.block(); const pending = fixture.controller.observePassive();
+  await expect(fixture.controller.observePassive()).rejects.toThrow('Another'); fixture.release(); await pending;
+});
+
+it('validates bounded desktop contracts and removes model-supplied process/dispatch fields', () => {
+  const base = { observationId: 'a'.repeat(32), action: 'click' as const, x: 0, y: 0 };
+  expect(validateAction({ ...base, pid: 123 } as any)).toEqual(base);
+  expect(() => validateAction({ ...base, x: NaN })).toThrow();
+  expect(() => validateAction({ ...base, action: 'type', text: '\ud800' })).toThrow();
+  expect(() => validateAction({ ...base, action: 'key', keys: ['WIN'] })).toThrow();
+  expect(() => validateObserve({ maxWidth: 9000 })).toThrow();
+});

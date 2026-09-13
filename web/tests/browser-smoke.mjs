@@ -13,6 +13,15 @@ let key;
 let commandCount = 0;
 let lastCommand;
 let heldOperation;
+let desktopStops = 0;
+const desktop = {
+  request: async kind => {
+    if (kind !== 'observe') throw new Error('Browser must not dispatch desktop input.');
+    return { observationId: 'a'.repeat(32), windowRef: 'b'.repeat(32), title: 'Desktop smoke fixture', timestamp: new Date().toISOString(),
+      bounds: { x: 0, y: 0, width: 1, height: 1 }, crop: { x: 0, y: 0, width: 1, height: 1 }, width: 1, height: 1, dpi: 96,
+      windows: [], actionable: false, backend: 'fixture', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
+  }, stop: async () => { desktopStops++; }, close: async () => {},
+};
 const agent = {
   providers: [
     {
@@ -102,6 +111,7 @@ const host = await createHost({
   dataDir,
   webDir: resolve("dist/web"),
   agent,
+  desktop,
 });
 const native = new Dealer({ linger: 0 });
 native.connect(host.nativeEndpoint);
@@ -188,6 +198,14 @@ try {
   await expect(
     page.getByText("Revit connected", { exact: true }),
   ).toBeVisible();
+  await page.getByRole('button', { name: 'Screenshot', exact: true }).click();
+  await page.getByText(/Latest screenshot: Desktop smoke fixture/).click();
+  const desktopImage = page.getByRole('img', { name: 'Revit desktop: Desktop smoke fixture' });
+  await expect(desktopImage).toBeVisible();
+  await expect.poll(() => desktopImage.evaluate(image => image.naturalWidth)).toBe(1);
+  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
+  await expect.poll(() => desktopStops).toBeGreaterThan(0);
+  await page.getByText(/Latest screenshot: Desktop smoke fixture/).click();
   await expect(page).toHaveURL(`${host.url}/`);
   await page.getByRole("link", { name: "Skip to message" }).focus();
   await page.keyboard.press("Enter");
@@ -383,7 +401,7 @@ try {
   ).toBeDisabled();
   expect(errors).toEqual([]);
   console.log(
-    "PASS browser smoke: production UI, token bootstrap/reload, query, rollback, cancellation, provider error/key privacy, Pi chat, mobile layout, disconnect/reconnect without replay, unauthorized token.",
+    "PASS browser smoke: desktop screenshot rendering/Stop, production UI, token bootstrap/reload, query, rollback, cancellation, provider error/key privacy, Pi chat, mobile layout, disconnect/reconnect without replay, unauthorized token.",
   );
 } finally {
   clearInterval(heartbeat);
