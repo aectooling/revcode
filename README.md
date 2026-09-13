@@ -118,6 +118,29 @@ Use C# queries to discover views by name and UniqueId and inspect exact element 
 
 Images require a model whose Pi definition includes image input. Custom endpoints initially declare text input only; update the model's `input` to `["text", "image"]` in the shared `models.json` and refresh providers if the endpoint supports vision. Captures use the existing execution journal and document binding. Temporary PNGs are removed after confirmed completion; uncertain executions retain their unique directory under the instance's `captures` folder. PNG bytes bypass the native JSON result limit and are capped at 10 MiB. Images are retained in Pi session logs but are not shown in browser execution history or carried into later chat turns; recapture when needed.
 
+## Atomic edit batches
+
+Use `batch` mode when several edits to **one document** must succeed together. Inspect first, prepare all named steps, and submit one request with an explicit `documentToken`. The console has a batch step editor; the agent uses the same `revit_execute_csharp` tool.
+
+```json
+{
+  "mode": "batch",
+  "documentToken": "<open document token>",
+  "transactionName": "Create and name a level",
+  "steps": [
+    { "name": "Create", "code": "var level = Level.Create(ctx.Doc, 15); return new { id = level.UniqueId };" },
+    { "name": "Name", "code": "var level = ctx.Doc.GetElement(ctx.StepResults[0].GetProperty(\"id\").GetString()); level.Name = \"Batch level\"; return level.UniqueId;" }
+  ],
+  "verify": { "code": "return ctx.Doc.GetElement(ctx.StepResults[0].GetProperty(\"id\").GetString()).Name == \"Batch level\";" }
+}
+```
+
+All steps and optional verification compile before editing. Each step owns an inner transaction within one synchronous transaction group. Verification runs without a transaction and must return exactly `true`; omission means no extra acceptance check. Confirmed success assimilates the group into one Undo entry. An exception, invalid result, failed verification or cooperative cancellation rolls back the group; uncertain cleanup reports `unknown` and blocks further execution.
+
+`ctx.StepResults` contains earlier materialized `System.Text.Json.JsonElement` results, available only within the batch. Limits are 1–20 steps, 64 KiB combined source/imports, 256 KiB aggregate result payload (with space reserved for receipts), and 100 log lines/16,000 characters. History distinguishes `committed`, `rolledBack`, `notRun`, and `unknown` steps. Rolled-back element results are discarded.
+
+This guarantee covers transaction-backed edits to the target during normal execution. It does not cover crashes, other documents, save/sync/export, document lifecycle, family loading, or filesystem/network effects. Recognized unsupported calls are rejected by the compiler; arbitrary C# remains full trust. Never retry individual steps or automatically replay an uncertain batch. See [validation and remaining acceptance checks](docs/TESTING.md).
+
 ## Architecture
 
 ```text

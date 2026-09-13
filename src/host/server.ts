@@ -1,3 +1,4 @@
+import { validateExecuteInput } from './execute-input.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -68,12 +69,7 @@ export async function createHost(options: HostOptions) {
     await persist(); broadcast();
   };
   const validate = (input: any): ExecuteInput => {
-    if (typeof input.code !== 'string' || !input.code.trim() || Buffer.byteLength(input.code) > 65536) throw new HttpError(400, 'C# code must be 1–65536 bytes.');
-    if (!['query', 'modify', 'api'].includes(input.mode)) throw new HttpError(400, 'mode must be query, modify or api.');
-    if (input.documentToken !== undefined && input.documentToken !== null && (typeof input.documentToken !== 'string' || !input.documentToken.trim() || input.documentToken.length > 200)) throw new HttpError(400, 'Invalid document token.');
-    if (input.usings !== undefined && (!Array.isArray(input.usings) || input.usings.length > 50 || input.usings.some((u: unknown) => typeof u !== 'string' || u.length > 200))) throw new HttpError(400, 'Invalid usings.');
-    if (input.transactionName !== undefined && (typeof input.transactionName !== 'string' || input.transactionName.length > 200)) throw new HttpError(400, 'Invalid transaction name.');
-    return { code: input.code, mode: input.mode, ...(input.documentToken !== undefined ? { documentToken: input.documentToken } : {}), ...(input.usings ? { usings: input.usings } : {}), ...(input.transactionName ? { transactionName: input.transactionName } : {}) };
+    try { return validateExecuteInput(input); } catch (error) { throw new HttpError(400, (error as Error).message); }
   };
   const checkDocument = () => {
     if (!connected()) throw new HttpError(409, 'Revit is disconnected.');
@@ -86,8 +82,8 @@ export async function createHost(options: HostOptions) {
     const token = validated.documentToken === undefined ? activeDocument?.token ?? null : validated.documentToken;
     const doc = token === null ? null : (context?.documents ?? (activeDocument ? [activeDocument] : [])).find(d => d.token === token);
     if (token !== null && !doc) throw new HttpError(409, 'The target document is no longer open. Refresh the document list.');
-    if (validated.mode === 'modify' && !doc) throw new HttpError(409, 'Modify requires an open target document.');
-    if (validated.mode === 'modify' && doc?.isReadOnly) throw new HttpError(409, 'Document is read-only.');
+    if ((validated.mode === 'modify' || validated.mode === 'batch') && !doc) throw new HttpError(409, 'Modify requires an open target document.');
+    if ((validated.mode === 'modify' || validated.mode === 'batch') && doc?.isReadOnly) throw new HttpError(409, 'Document is read-only.');
     const op: Operation = { ...validated, operationId: randomUUID(), documentToken: token, createdAt: new Date().toISOString(), status: 'queued' };
     state.operations.push(op);
     await persist();

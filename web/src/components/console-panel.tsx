@@ -2,7 +2,7 @@ import { Box, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./ui/button";
 
-export type Mode = "query" | "modify" | "api";
+export type Mode = "query" | "modify" | "api" | "batch";
 
 export const examples: { label: string; mode: Mode; code: string }[] = [
   {
@@ -53,6 +53,7 @@ export function DocumentTarget({ label }: { label: string }) {
 }
 
 export function ConsolePanel({
+  steps, onStepsChange, verify, onVerifyChange,
   code,
   onCodeChange,
   mode,
@@ -68,6 +69,10 @@ export function ConsolePanel({
   onCancel,
   docReadOnly,
 }: {
+  steps: { name: string; code: string }[];
+  onStepsChange(steps: { name: string; code: string }[]): void;
+  verify: string;
+  onVerifyChange(value: string): void;
   code: string;
   onCodeChange(value: string): void;
   mode: Mode;
@@ -83,7 +88,7 @@ export function ConsolePanel({
   onCancel(): void;
   docReadOnly: boolean;
 }): ReactNode {
-  const runDisabled = !canRun || !code.trim() || (mode === "modify" && docReadOnly);
+  const runDisabled = !canRun || (mode === "batch" ? steps.some(s => !s.name.trim() || !s.code.trim()) : !code.trim()) || ((mode === "modify" || mode === "batch") && docReadOnly);
   return (
     <section aria-label="C# console" className="grid gap-1.5">
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Snippet examples">
@@ -105,7 +110,21 @@ export function ConsolePanel({
         <span className="font-mono font-medium text-ink-soft">snippet.cs</span>
         <span className="truncate font-mono">object? Execute(RevcodeContext ctx)</span>
       </div>
-      <textarea
+      {mode === "batch" ? <div className="grid gap-2" aria-label="Batch steps">
+        <p className="text-xs text-muted">All steps edit one target and commit together as one Undo entry. Verification must return true.</p>
+        {steps.map((step, index) => <fieldset key={index} className="grid gap-1 rounded border border-line p-2">
+          <legend>Step {index + 1}</legend>
+          <input aria-label={`Step ${index + 1} name`} value={step.name} maxLength={100} className="bg-surface p-2"
+            onChange={e => onStepsChange(steps.map((s, i) => i === index ? { ...s, name: e.target.value } : s))} />
+          <textarea aria-label={`Step ${index + 1} C#`} value={step.code} className="min-h-24 bg-surface p-2 font-mono text-xs"
+            onChange={e => onStepsChange(steps.map((s, i) => i === index ? { ...s, code: e.target.value } : s))} />
+          <Button variant="secondary" disabled={steps.length === 1} onClick={() => onStepsChange(steps.filter((_, i) => i !== index))}>Remove step</Button>
+        </fieldset>)}
+        <Button variant="secondary" disabled={steps.length >= 20} onClick={() => onStepsChange([...steps, { name: `Step ${steps.length + 1}`, code: "return null;" }])}>Add step</Button>
+        <label className="grid gap-1 text-xs">Optional verification C#
+          <textarea aria-label="Batch verification" value={verify} onChange={e => onVerifyChange(e.target.value)} placeholder="return true;" className="min-h-20 bg-surface p-2 font-mono" />
+        </label>
+      </div> : <textarea
         id="code"
         aria-label="C# method body"
         spellCheck={false}
@@ -118,7 +137,7 @@ export function ConsolePanel({
           }
         }}
         className="min-h-[220px] w-full resize-y rounded-md border border-line bg-surface p-3 font-mono text-[13px] leading-relaxed outline-none transition-colors hover:border-line-strong focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/15"
-      />
+      />}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <label htmlFor="document-target" className="flex min-w-0 items-center gap-2 text-xs font-medium text-ink-soft">
           Target document
@@ -143,6 +162,7 @@ export function ConsolePanel({
           >
             <option value="query">Query · no transaction</option>
             <option value="modify">Modify · one transaction</option>
+            <option value="batch">Batch · all steps or rollback</option>
             <option value="api">API · document operations</option>
           </select>
         </label>

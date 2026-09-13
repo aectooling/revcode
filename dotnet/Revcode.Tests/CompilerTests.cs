@@ -17,10 +17,10 @@ public sealed class CompilerTests : IDisposable
         Directory.CreateDirectory(folder);
         var bcl = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
         var stub = CSharpCompilation.Create("TestContract", [CSharpSyntaxTree.ParseText("""
-            namespace Autodesk.Revit.DB { public class Document { public void Save() {} public void LoadFamily(Document target) {} public void LoadFamily(string path) {} } public class Transaction { public Transaction(Document doc) {} } }
+            namespace Autodesk.Revit.DB { public class Document { public void Save() {} public void ExportImage(ImageExportOptions options) {} public void LoadFamily(Document target) {} public void LoadFamily(string path) {} } public class ImageExportOptions {} public class Transaction { public Transaction(Document doc) {} } }
             namespace Autodesk.Revit.UI { public class UIApplication {} }
             namespace Revcode.Contracts {
-                public class RevcodeContext { public Autodesk.Revit.DB.Document Doc => new(); public void CheckCancellation() {} }
+                public class RevcodeContext { public Autodesk.Revit.DB.Document Doc => new(); public Autodesk.Revit.UI.UIApplication UiApp => new(); public void CheckCancellation() {} }
                 public interface IRevcodeScript { object Execute(RevcodeContext ctx); }
             }
             """)], bcl.Select(x => MetadataReference.CreateFromFile(x)), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
@@ -36,6 +36,29 @@ public sealed class CompilerTests : IDisposable
         Assert.NotNull(result.Assembly);
         Assert.NotNull(result.Pdb);
         Assert.DoesNotContain(result.Diagnostics, x => x.Severity == "error");
+    }
+
+    [Theory]
+    [InlineData("batch")]
+    [InlineData("verify")]
+    public void BatchContractsRejectKnownExternalEffects(string mode)
+    {
+        Assert.NotNull(SnippetCompiler.Compile(new("return true;", null, references, mode)).Assembly);
+        foreach (var code in new[] { "ctx.Doc.Save(); return true;", "ctx.Doc.LoadFamily(\"family.rfa\"); return true;", "System.IO.File.WriteAllText(\"test\", \"data\"); return true;", "return System.Net.Dns.GetHostName();", "return ctx.UiApp;", "return ctx?.UiApp;" })
+            Assert.Null(SnippetCompiler.Compile(new(code, null, references, mode)).Assembly);
+    }
+
+    [Theory]
+    [InlineData("query")]
+    [InlineData("modify")]
+    [InlineData("batch")]
+    [InlineData("verify")]
+    public void ImageExportRequiresApiMode(string mode)
+    {
+        const string code = "ctx.Doc.ExportImage(new ImageExportOptions()); return false;";
+        var rejected = SnippetCompiler.Compile(new(code, null, references, mode));
+        Assert.Null(rejected.Assembly);
+        Assert.NotNull(SnippetCompiler.Compile(new(code, null, references, "api")).Assembly);
     }
 
     [Fact]

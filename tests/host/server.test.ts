@@ -25,6 +25,22 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000) {
 }
 
 describe('authenticated Revit host', () => {
+  it('journals and deduplicates the entire batch and fences an unknown group', async () => {
+    const { api, dealer, native, dir, host } = await setup();
+    const input = { requestId: 'batch-request-001', mode: 'batch', documentToken: 'doc-1', steps: [{ name: 'First', code: 'return 1;' }, { name: 'Second', code: 'return 2;' }], verify: { code: 'return true;' } };
+    expect((await api('execute', { ...input, documentToken: undefined })).status).toBe(400);
+    expect((await api('execute', { ...input, documentToken: 'closed' })).status).toBe(409);
+    const accepted = await (await api('execute', input)).json();
+    const [frame] = await dealer.receive();
+    expect(JSON.parse(frame.toString()).command).toMatchObject({ mode: 'batch', steps: input.steps, verify: input.verify, documentToken: 'doc-1' });
+    expect(JSON.parse(await readFile(join(dir, 'journal.json'), 'utf8')).operations[0].steps).toEqual(input.steps);
+    expect(await (await api('execute', input)).json()).toEqual(accepted);
+    expect((await api('execute', { ...input, verify: { code: 'return false;' } })).status).toBe(409);
+    await native('operation', { operationId: accepted.operationId, status: 'unknown', transactionStatus: 'Unknown' });
+    await expect.poll(() => host.snapshot().operations[0].status).toBe('unknown');
+    expect((await api('execute', { ...input, requestId: 'batch-request-002' })).status).toBe(409);
+  });
+
   it('targets a non-active document and preserves the explicit binding in the journal', async () => {
     const { api, native, dealer, host, dir } = await setup();
     const target = { ...context.document, token: 'project-2', title: 'Other project' };
@@ -95,15 +111,16 @@ describe('authenticated Revit host', () => {
     expect((await api('execute', { requestId: 'mutation-0002', code: 'return 2;', mode: 'modify' })).status).toBe(202);
   });
 
-  it('routes an agent tool through the same native executor and persists the answer', async () => {
+  it.each(['query', 'batch'] as const)('routes an agent %s tool through the same native executor and persists the answer', async mode => {
     let prompts = 0;
     const { api, dealer, native } = await setup({ prompt: async (_text, _settings, _context, _history, execute, update) => {
       prompts++;
-      const result = await execute({ code: 'return 3;', mode: 'query' }); update(`Found ${result.result} levels.`);
+      const result = await execute(mode === 'batch' ? { mode, documentToken: 'doc-1', steps: [{ name: 'Edit', code: 'return 3;' }] } : { code: 'return 3;', mode }); update(`Found ${result.result} levels.`);
     } });
     const request = { requestId: 'chat-000001', text: 'How many levels?' };
     expect((await api('chat', request)).status).toBe(202);
     const [frame] = await dealer.receive(); const { command } = JSON.parse(frame.toString());
+    expect(command.mode).toBe(mode);
     await native('operation', { operationId: command.operationId, status: 'succeeded', result: 3 });
     await expect.poll(async () => (await (await api('state')).json()).messages.at(-1).text).toBe('Found 3 levels.');
     expect((await api('chat', request)).status).toBe(202); expect(prompts).toBe(1);

@@ -246,7 +246,9 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         if (!operations.TryAdd(command.OperationId, operation)) return;
         if (fenced) { Finish(operation, "unknown", "Execution is fenced after an unresolved transaction. Restart Revit after inspecting the model."); return; }
         if (Interlocked.CompareExchange(ref active, 1, 0) != 0) { Finish(operation, "failed", "Another native operation is still active.", release: false); return; }
-        if (command.Mode is not ("query" or "modify" or "api") || string.IsNullOrWhiteSpace(command.Code) || command.Mode == "modify" && command.DocumentToken is null)
+        if (command.Mode == "batch" ? !ValidBatch(command) : command.Mode is not ("query" or "modify" or "api")
+            || string.IsNullOrWhiteSpace(command.Code) || command.Mode == "modify" && command.DocumentToken is null
+            || command.Steps != null || command.Verify != null)
         { Finish(operation, "failed", "Invalid execution request."); return; }
         _ = CompileAsync(operation);
     }
@@ -257,23 +259,29 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(operation.Cancellation.Token, shutdown.Token);
             linked.CancelAfter(TimeSpan.FromSeconds(60));
-            var start = new ProcessStartInfo(ResolvePath(runtime.CompilerPath))
-            { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = root };
-            using var worker = Process.Start(start) ?? throw new InvalidOperationException("Could not start compiler worker.");
-            using var registration = linked.Token.Register(() => { try { if (!worker.HasExited) worker.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } });
-            var output = worker.StandardOutput.ReadToEndAsync(linked.Token);
-            var errors = worker.StandardError.ReadToEndAsync(linked.Token);
-            await worker.StandardInput.WriteAsync(JsonSerializer.Serialize(new { code = operation.Command.Code, usings = operation.Command.Usings, mode = operation.Command.Mode, references }, Json).AsMemory(), linked.Token);
-            worker.StandardInput.Close();
-            await worker.WaitForExitAsync(linked.Token);
-            var result = JsonSerializer.Deserialize<CompileResult>(await output, Json) ?? throw new InvalidOperationException("Compiler returned invalid output.");
-            _ = await errors;
-            operation.Diagnostics = result.Diagnostics;
-            if (result.Assembly is null) { Finish(operation, "failed", "C# compilation failed."); return; }
-            operation.Assembly = Convert.FromBase64String(result.Assembly);
-            operation.Pdb = result.Pdb is null ? null : Convert.FromBase64String(result.Pdb);
+            var snippets = operation.Command.Mode == "batch"
+                ? operation.Command.Steps!.Select(s => (s.Name, s.Code, s.Usings, Mode: "batch"))
+                    .Concat(operation.Command.Verify is { } verification ? [("verification", verification.Code, verification.Usings, "verify")] : []).ToArray()
+                : [(Name: "snippet", Code: operation.Command.Code!, Usings: operation.Command.Usings, Mode: operation.Command.Mode!)];
+            var compiled = new List<CompiledStep>();
+            var diagnostics = new List<Diagnostic>();
+            for (var i = 0; i < snippets.Length; i++)
+            {
+                var snippet = snippets[i];
+                var result = await CompileSnippetAsync(snippet.Code, snippet.Usings, snippet.Mode, linked.Token);
+                diagnostics.AddRange(result.Diagnostics.Select(d => operation.Command.Mode == "batch" ? d with { StepIndex = i, StepName = snippet.Name } : d));
+                operation.Diagnostics = diagnostics.ToArray();
+                if (result.Assembly is null) { Finish(operation, "failed", "C# compilation failed; no steps executed.", transactionStatus: "NotStarted"); return; }
+                compiled.Add(new(snippet.Name, Convert.FromBase64String(result.Assembly), result.Pdb is null ? null : Convert.FromBase64String(result.Pdb)));
+            }
+            if (operation.Command.Mode == "batch")
+            {
+                operation.Steps = compiled.Take(operation.Command.Steps!.Length).ToArray();
+                operation.Verify = operation.Command.Verify is null ? null : compiled[^1];
+            }
+            else { operation.Assembly = compiled[0].Assembly; operation.Pdb = compiled[0].Pdb; }
             operation.Cancellation.Token.ThrowIfCancellationRequested();
-            Volatile.Write(ref operation.Update, new(operation.Command.OperationId, "queued", Diagnostics: result.Diagnostics));
+            Volatile.Write(ref operation.Update, new(operation.Command.OperationId, "queued", Diagnostics: operation.Diagnostics));
             ready.Enqueue(operation);
             // Raise is Revit's thread-safe modeless scheduling entry point; no document API is touched here.
             // Relying only on default Idling can stall indefinitely while the user works in the browser.
@@ -285,6 +293,33 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         }
         catch (OperationCanceledException) { Finish(operation, operation.Cancellation.IsCancellationRequested || shutdown.IsCancellationRequested ? "cancelled" : "failed", "Compilation cancelled or exceeded 60 seconds."); }
         catch (Exception ex) { Finish(operation, "failed", "Compiler worker failed: " + ex.Message); }
+    }
+
+    private static bool ValidBatch(NativeCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.DocumentToken) || command.Steps is not { Length: >= 1 and <= 20 }
+            || command.Code != null || command.Usings != null) return false;
+        if (command.Steps.Any(s => s is null || string.IsNullOrWhiteSpace(s.Name) || s.Name.Length > 100)) return false;
+        var snippets = command.Steps.Select(s => new BatchSnippet(s.Code, s.Usings))
+            .Concat(command.Verify is {} verify ? [verify] : []).ToArray();
+        return snippets.All(s => !string.IsNullOrWhiteSpace(s.Code) && (s.Usings is null || s.Usings.Length <= 40 && s.Usings.All(u => u != null && u.Length <= 200)))
+            && snippets.Sum(s => (long)System.Text.Encoding.UTF8.GetByteCount(s.Code) + (s.Usings ?? []).Sum(u => System.Text.Encoding.UTF8.GetByteCount(u))) <= 65536;
+    }
+
+    private async Task<CompileResult> CompileSnippetAsync(string code, string[]? usings, string mode, CancellationToken cancellation)
+    {
+        var start = new ProcessStartInfo(ResolvePath(runtime.CompilerPath))
+        { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = root };
+        using var worker = Process.Start(start) ?? throw new InvalidOperationException("Could not start compiler worker.");
+        using var registration = cancellation.Register(() => { try { if (!worker.HasExited) worker.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } });
+        var output = worker.StandardOutput.ReadToEndAsync(cancellation);
+        var errors = worker.StandardError.ReadToEndAsync(cancellation);
+        await worker.StandardInput.WriteAsync(JsonSerializer.Serialize(new { code, usings, mode, references }, Json).AsMemory(), cancellation);
+        worker.StandardInput.Close();
+        await worker.WaitForExitAsync(cancellation);
+        var result = JsonSerializer.Deserialize<CompileResult>(await output, Json) ?? throw new InvalidOperationException("Compiler returned invalid output.");
+        _ = await errors;
+        return result;
     }
 
     public void Execute(UIApplication app)
@@ -299,8 +334,8 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
                 ? app.Application.Documents.Cast<Document>().SingleOrDefault(x => x.IsValidObject && !x.IsLinked && documents.GetToken(x) == token)
                     ?? throw new InvalidOperationException("The target document is no longer open. Query the open documents before retrying.")
                 : null;
-            if (document is null && operation.Command.Mode == "modify") throw new InvalidOperationException("Modify requires a target document.");
-            if (document != null && (document.IsModifiable || document.IsReadOnly && operation.Command.Mode == "modify"))
+            if (document is null && operation.Command.Mode is "modify" or "batch") throw new InvalidOperationException("Modify requires a target document.");
+            if (document != null && (document.IsModifiable || document.IsReadOnly && operation.Command.Mode is "modify" or "batch"))
                 throw new InvalidOperationException("The document is read-only or already has an active transaction.");
             Volatile.Write(ref operation.Update, new(operation.Command.OperationId, "running", Diagnostics: operation.Diagnostics));
             ExecuteScript(app, document, operation);
@@ -308,14 +343,16 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         }
         catch (OperationCanceledException) { Finish(operation, "cancelled", "Execution cancelled before starting."); }
         catch (Exception ex) { Finish(operation, "failed", ex.Message); }
-        finally { operation.Assembly = null; operation.Pdb = null; }
+        finally { operation.Assembly = null; operation.Pdb = null; operation.Steps = null; operation.Verify = null; }
     }
 
     private void ExecuteScript(UIApplication app, Document? document, Operation operation)
     {
         try
         {
-            var outcome = ScriptExecutor.Execute(app, document, documents.GetToken, operation.Command.Mode!, operation.Command.TransactionName,
+            var outcome = operation.Command.Mode == "batch"
+                ? BatchExecutor.Execute(app, document!, documents.GetToken, operation.Command.TransactionName, operation.Steps!, operation.Verify, operation.Cancellation.Token)
+                : ScriptExecutor.Execute(app, document, documents.GetToken, operation.Command.Mode!, operation.Command.TransactionName,
                 operation.Assembly!, operation.Pdb, operation.Cancellation.Token);
             if (outcome.Status == "unknown") fenced = true;
             Finish(operation, outcome.Status, outcome.Error, outcome.Result, outcome.Logs, outcome.TransactionStatus);
@@ -363,6 +400,8 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         public OperationUpdate Update = new(command.OperationId, "compiling");
         public string? AcknowledgedStatus;
         public Diagnostic[]? Diagnostics;
+        public CompiledStep[]? Steps;
+        public CompiledStep? Verify;
         public byte[]? Assembly;
         public byte[]? Pdb;
     }

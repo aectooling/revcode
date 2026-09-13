@@ -3,8 +3,9 @@ import { Badge } from "./ui/badge";
 
 export type Operation = {
   operationId: string;
-  code: string;
-  mode: "query" | "modify" | "api";
+  code?: string;
+  steps?: { name: string; code: string }[];
+  mode: "query" | "modify" | "api" | "batch";
   status: string;
   createdAt: string;
   result?: unknown;
@@ -13,6 +14,7 @@ export type Operation = {
   transactionStatus?: string;
   elapsedMs?: number;
   diagnostics?: {
+    stepName?: string;
     severity: string;
     message: string;
     line?: number;
@@ -60,7 +62,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
                     {operation.status === "queued" ? "Waiting for Revit" : operation.status}
                   </Badge>
                   <span className="min-w-0 flex-1 truncate font-medium text-ink-soft">
-                    {operation.mode === "modify" ? "Model change" : "Model query"}
+                    {operation.mode === "batch" ? "Atomic batch" : operation.mode === "modify" ? "Model change" : operation.mode === "api" ? "API operation" : "Model query"}
                   </span>
                   <span className="shrink-0 font-mono text-[11px] text-muted">
                     {operation.elapsedMs !== undefined
@@ -76,8 +78,16 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
                       : ""}
                   </p>
                   <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-[3px] border border-line bg-surface px-2 py-1.5 font-mono text-[11px] leading-relaxed text-ink-soft">
-                    <code>{operation.code}</code>
+                    <code>{operation.code ?? "Batch steps below"}</code>
                   </pre>
+                  {operation.steps?.map((step, index) => {
+                    const receipt = (operation.result as { steps?: { status: string; result?: unknown; error?: string }[] } | undefined)?.steps?.[index];
+                    return <details key={index} className="rounded border border-line p-2">
+                      <summary>{index + 1}. {step.name} · {receipt?.status ?? ((operation.transactionStatus === "NotStarted" || ["failed", "cancelled"].includes(operation.status)) ? "notRun" : operation.status === "unknown" ? "unknown" : "awaiting outcome")}</summary>
+                      <pre className="overflow-auto whitespace-pre-wrap">{step.code}</pre>
+                      {receipt && <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(receipt, null, 2)}</pre>}
+                    </details>;
+                  })}
                   {operation.error && (
                     <p className="text-[11px] leading-relaxed text-danger">{operation.error}</p>
                   )}
@@ -87,7 +97,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
                       {diagnostic.line
                         ? ` · line ${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ""}`
                         : ""}
-                      : {diagnostic.message}
+                      : {diagnostic.stepName ? `${diagnostic.stepName}: ` : ""}{diagnostic.message}
                     </p>
                   ))}
                   {!!operation.logs?.length && (
