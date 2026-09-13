@@ -8,6 +8,14 @@ Run `npm run check` for TypeScript checks, host tests, and the production web/ho
 
 Run `npm run test:native` for compiler, collectible assembly, and document wrapper identity tests. Run `npm run test:transport` for an actual .NET 8 NetMQ exchange with the runtime's Immutable assembly already loaded. Run `npm run test:browser` and `npm run test:provider-ui` after `npm run build` for production UI checks in installed Microsoft Edge. Provider UI checks use the real Pi SDK with a simulated OAuth provider, including browser/code prompts, cancellation, shared credential reuse, model selection, and custom keyless endpoints. All credential fixtures use isolated temporary files, never your real Pi credentials.
 
+## Desktop spike checks
+
+Build `dotnet/Revcode.Desktop/Revcode.Desktop.csproj -c Release` and run `npm run test:native`. Desktop regression cases cover resized/cropped image mapping on negative monitor origins, virtual-desktop edge normalization, invalid coordinates, duplicate/conflicting dispatch IDs, ledger capacity, Windows x64 input structure layout, Unicode key flags, and extended control keys. CI builds the standalone helper and checks the manual driver's JavaScript syntax.
+
+See [DESKTOP-PROTOCOL.md](DESKTOP-PROTOCOL.md) for publishing and the manual evidence driver. This is a phase 1 baseline; no live Revit desktop checks have passed yet. Before registering desktop tools with Pi, capture the ribbon, Project Browser, GPU viewport, hover menu, and an owned dialog; compare the experimental GDI baseline with HWND Windows.Graphics.Capture. In a disposable project, locate the search field from the fresh PNG, click, type a unique Unicode string, verify its display, select it with CTRL+A, clear with BACKSPACE, and capture again. Repeat at 100%, 150%, 200%, negative monitor origins, mixed DPI, and after movement/resizing. Record exact Revit/Windows versions, backend, screenshot IDs, action receipts, and every failure.
+
+Also exercise two competing helpers, Ctrl+Alt+F12 during typing, pipe Stop, parent exit, missing heartbeat, two-minute inactivity, focus theft, held modifiers/buttons, target-point occlusion, locked desktop, integrity mismatch, stale observation, duplicate action IDs, helper restart with an old generation, and disconnect after dispatch. Verify that observation remains possible after an unknown receipt and input remains blocked. Capture failure after a dispatched receipt must not permit replay. The manual spike has no native scheduler: start from idle Revit and do not run API operations concurrently. Production host/browser/provider integration and a user-selected complete UI workflow remain later acceptance gates.
+
 ## Measured native validation (2026-09-13)
 
 The installed package was exercised in **Revit 2026.3, build 26.3.0.37, running .NET 8.0.31**, using a newly created disposable project. The following passed through the production Node host and actual ZeroMQ/NetMQ bridge:
