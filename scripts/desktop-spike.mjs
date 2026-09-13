@@ -2,8 +2,10 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
+import { DesktopWorkflow } from './desktop-workflow.mjs';
 
 const [executable, pidText, outputDirectory, inputFlag] = process.argv.slice(2);
 if (process.platform !== 'win32' || !executable || !/^\d+$/.test(pidText ?? '') || !outputDirectory || (inputFlag && inputFlag !== '--enable-input')) {
@@ -16,7 +18,7 @@ const starts = execFileSync('powershell.exe', ['-NoProfile', '-Command',
   `@(${Number(pidText)},${process.pid}) | ForEach-Object { (Get-Process -Id $_).StartTime.ToUniversalTime().Ticks.ToString() }`], { encoding: 'utf8', windowsHide: true }).trim().split(/\r?\n/);
 if (starts.length !== 2 || starts.some(value => !/^\d+$/.test(value))) throw new Error('Could not bind process start identities.');
 const helper = spawn(resolve(executable), [pidText, starts[0], String(process.pid), starts[1], ...(inputFlag ? [inputFlag] : [])], { windowsHide: true, stdio: ['pipe', 'pipe', 'inherit'] });
-let generation, observationId, closed = false;
+let generation, closed = false;
 const pending = new Map();
 let journalChain = Promise.resolve();
 function record(entry) {
@@ -53,35 +55,53 @@ async function send(fields, persist = true) {
   if (response.result?.data) {
     const { data, ...metadata } = response.result;
     const artifact = `${metadata.observationId}.png`;
-    await writeFile(resolve(directory, artifact), Buffer.from(data, 'base64'), { flag: 'wx' });
-    response.result = { ...metadata, artifact };
-    observationId = metadata.actionable ? metadata.observationId : undefined;
+    const bytes = Buffer.from(data, 'base64');
+    await writeFile(resolve(directory, artifact), bytes, { flag: 'wx' });
+    response.result = { ...metadata, artifact, digest: createHash('sha256').update(bytes).digest('hex') };
   }
   if (persist) await record({ kind: 'response', response });
   return response;
 }
 let heartbeat;
+let active;
+let running;
+async function workflowSend(fields) {
+  // Stop bypasses disk writes so a slow/full journal cannot delay cancellation.
+  const response = await send(fields, fields.kind !== 'stop');
+  console.log(JSON.stringify(response, null, 2));
+  if (response.error) throw new Error(response.error);
+  return response.result;
+}
 try {
   const hello = await send({ kind: 'hello' }); generation = hello.generation;
   console.log(JSON.stringify(hello, null, 2));
   heartbeat = setInterval(() => { void send({ kind: 'heartbeat' }, false).catch(error => console.error(error.message)); }, 2000);
-  console.log('Enter one JSON request per line. Start: {"kind":"start"}; capture: {"kind":"observe"}; Stop: {"kind":"stop"}. Ctrl+Alt+F12 releases input.');
-  console.log('Action example after reviewing PNG: {"kind":"action","action":"click","x":100,"y":100}. Coordinates must come from that image.');
+  const workflow = new DesktopWorkflow(workflowSend, (ms, signal) => delay(ms, undefined, { signal }), !!inputFlag);
+  console.log('Capture: {"kind":"observe"}. You have 3 seconds to activate Revit and release all keys/buttons. Control is released after capture so you can review the PNG.');
+  console.log('Then stage one action: {"kind":"action","action":"click","x":100,"y":100}. Activate Revit again during the delay. A fresh image must match the reviewed PNG or input is refused.');
+  console.log('Optional delaySeconds: 1–30. Stop: {"kind":"stop"}, also during the delay. Ctrl+Alt+F12 stops input while the helper owns control.');
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of input) {
     try {
       const fields = JSON.parse(line);
-      if (fields.kind === 'action') fields.observationId ??= observationId;
-      const response = await send(fields); console.log(JSON.stringify(response, null, 2));
-      if (fields.kind === 'action') {
-        observationId = undefined;
-        // Capture is separate: its failure cannot erase a dispatch receipt.
-        console.log(JSON.stringify(await send({ kind: 'observe' }), null, 2));
+      if (fields.kind === 'stop') {
+        active?.abort();
+        workflow.reference = undefined;
+        void workflowSend({ kind: 'stop' }).catch(error => console.error(error.message));
+      } else {
+        if (active) throw new Error('A staged command is running. Stop it or wait for completion.');
+        const controller = new AbortController();
+        active = controller;
+        running = workflow.run(fields, controller.signal)
+          .catch(error => console.error(error.message))
+          .finally(() => { active = undefined; });
       }
     } catch (error) { console.error(error.message); }
   }
 } finally {
+  active?.abort();
+  await running;
   clearInterval(heartbeat);
-  if (!closed) { try { await send({ kind: 'stop' }); } catch { /* watchdog/EOF releases the lease */ } helper.stdin.end(); }
+  if (!closed) { try { await send({ kind: 'stop' }, false); } catch { /* watchdog/EOF releases the lease */ } helper.stdin.end(); }
   await journalChain; await journal.close();
 }

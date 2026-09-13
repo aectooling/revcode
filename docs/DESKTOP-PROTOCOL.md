@@ -11,6 +11,21 @@ node scripts/desktop-spike.mjs artifacts/desktop-spike/Revcode.Desktop.exe <Revi
 
 Use a disposable Revit project with no active API operation. The driver records intent and flushes it to disk before dispatch; it writes responses and PNG artifacts to a **new** evidence directory. Omit `--enable-input` for passive capture only. The helper itself takes Revit PID, Revit UTC start ticks, parent PID, parent UTC start ticks, and optionally `--enable-input`. Start identities are decimal strings on the command line, preserving 64-bit precision. The parent must keep the pipe open and send heartbeats. Normal integrity and a local, unlocked session are required. Remote desktop sessions are conservatively rejected for this spike.
 
+## Manual staged testing
+
+The driver accepts `observe`, `action`, and `stop` commands. It manages helper start/stop and observation IDs; do not enter raw `start` requests in the driver.
+
+1. Enter `{"kind":"observe","delaySeconds":5}`. Activate Revit during those five seconds, then release the mouse and keyboard. The driver captures and releases control automatically.
+2. Return to the terminal and review the saved PNG. Choose the target from that image.
+3. Enter, for example, `{"kind":"action","action":"click","x":100,"y":100,"delaySeconds":5}` with the actual image coordinates. Activate Revit again during the delay and release all input.
+4. The driver reacquires control and captures a fresh frame. It sends the action using that new observation ID **only if the PNG hash, window identity, dialog set, crop, dimensions, bounds, and DPI match the reviewed evidence**. It captures afterward and releases control again.
+
+The default delay is three seconds, configurable from 1–30. Type `{"kind":"stop"}` at any time, including during staging; the driver reads Stop independently of pending work and bypasses journal writes for cancellation. Ctrl+Alt+F12 also stops the helper while its input lease is active. Staging itself holds no input lease. End-of-input cancels pending staging and closes the helper pipe.
+
+A changed image refuses the action and saves the new PNG for review. There is no automatic retry. Exact PNG equality is deliberately conservative: caret blinking, hover effects, animation, window changes, or a changed Revit tab can cause refusal. Review the newest PNG before explicitly submitting again. This check does not establish general visual targeting reliability. Passive capture without `--enable-input` remains available but cannot authorize actions. The driver's saved screenshots are review references after it releases control, never reusable actionable helper observations.
+
+## Helper wire contract
+
 The transport is inherited UTF-8 stdin/stdout, one JSON object per line. Diagnostics go to stderr. Requests are limited to 16 KiB, eight queued requests, and protocol version 1. Malformed framing closes the helper and releases its lease. Responses contain `version`, `requestId`, `generation`, `result`, and `error`. Clients must keep reading stdout; backpressure beyond eight responses shuts down the helper. No TCP listener or credentials are needed.
 
 | Kind | Fields/behavior |
@@ -33,7 +48,7 @@ Actions:
 
 Observation returns PNG base64 in `data` with `mimeType: image/png` (maximum 8 MiB encoded source bytes, 4 million output pixels, 16 million captured pixels), UTC acquisition timestamp, dimensions, physical window bounds, physical crop bounds, DPI, opaque foreground reference, and enumerated main/owned top-level windows. Resizing maps image coordinates through the physical crop. Negative desktop origins and virtual-desktop normalization are supported. The driver replaces bytes with an artifact filename in its durable journal. It never sends screenshots to a provider. Evidence is retained until the tester removes the directory; no unattended artifact accumulation is enabled.
 
-An observation is actionable only with the input lease, foreground ownership, matching window geometry/dialog set, and no held input. Each action consumes its observation; expiry is 15 seconds. Revalidate before each batch; pointer targets also check the topmost window at the physical target. Cursor movement, held keys/buttons, changed focus, geometry, or dialogs pause control. Detection is best effort: desktop input is not atomic against the user. Input is bounded by 10-second heartbeat and two-minute action inactivity timeouts, including model-thinking intervals in future clients. Stop is signaled from the pipe reader independently of pending capture; the message loop handles the desktop hotkey and releases ownership. Already inserted events cannot be recalled, and synchronous screen capture may delay hotkey handling until it returns.
+An observation is actionable only with the input lease, foreground ownership, matching window geometry/dialog set, and no held input. Each action consumes its observation; expiry is 15 seconds. Revalidate after pumping messages and immediately before each batch; pointer targets repeat hit-testing at that point. Cursor movement, held keys/buttons, changed focus, geometry, or dialogs pause control. Detection is best effort: desktop input is not atomic against the user. Input is bounded by 10-second heartbeat and two-minute action inactivity timeouts, including model-thinking intervals in future clients. Stop is signaled from the pipe reader independently of pending capture; the message loop handles the desktop hotkey and releases ownership. Already inserted events cannot be recalled, and synchronous screen capture may delay hotkey handling until it returns.
 
 Receipts distinguish `dispatched`, `not-dispatched`, and `unknown`, with inserted event counts. Dispatch is not application success. Partial insertion or interruption after input fences further actions for that generation while observation remains available. Input releases are attempted on all stop/error paths; release failure is reported to stderr and keeps the unknown fence. A missing post-action screenshot never changes a dispatch receipt into non-dispatch.
 

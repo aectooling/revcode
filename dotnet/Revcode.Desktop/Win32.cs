@@ -7,6 +7,15 @@ namespace Revcode.Desktop;
 
 internal static class Win32
 {
+    internal const uint RootAncestor = 2;
+    internal const uint WindowOwner = 4;
+    internal const uint AbsoluteVirtualMove = 0x0001 | 0x4000 | 0x8000;
+    internal const uint LeftDown = 0x0002, LeftUp = 0x0004;
+    internal const uint VerticalWheel = 0x0800, HorizontalWheel = 0x1000;
+    internal const int WheelDelta = 120;
+    internal const uint KeyboardInput = 1, ExtendedKey = 1, KeyUp = 2, UnicodeKey = 4;
+    internal const uint HotkeyControlAltNoRepeat = 0x0001 | 0x0002 | 0x4000;
+    internal const uint KeyF12 = 0x7B;
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; public readonly Bounds Bounds => new(Left, Top, Right - Left, Bottom - Top); }
     [StructLayout(LayoutKind.Sequential)] internal struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct Mouse { public int X, Y; public uint Data, Flags, Time; public nuint Extra; }
@@ -74,5 +83,14 @@ internal static class Win32
     internal static Bounds Geometry(nint window) => GetWindowRect(window, out var rect) ? rect.Bounds : throw new Win32Exception();
     internal static Bounds Desktop => new(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
     internal static Input MouseEvent(uint flags, int x = 0, int y = 0, uint data = 0) => new() { Data = new() { Mouse = new() { X = x, Y = y, Data = data, Flags = flags } } };
-    internal static Input KeyEvent(ushort key, bool up, bool unicode = false) => new() { Type = 1, Data = new() { Keyboard = new() { Key = unicode ? (ushort)0 : key, Scan = unicode ? key : (ushort)0, Flags = (up ? 2u : 0u) | (unicode ? 4u : key is >= 35 and <= 40 or 46 ? 1u : 0u) } } };
+    internal static Input KeyEvent(ushort key, bool up, bool unicode = false) => new()
+    {
+        Type = KeyboardInput,
+        Data = new() { Keyboard = new()
+        {
+            Key = unicode ? (ushort)0 : key,
+            Scan = unicode ? key : (ushort)0,
+            Flags = (up ? KeyUp : 0) | (unicode ? UnicodeKey : key is >= 35 and <= 40 or 46 ? ExtendedKey : 0),
+        } },
+    };
 }

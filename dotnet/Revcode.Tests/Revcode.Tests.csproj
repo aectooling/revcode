@@ -9,5 +9,6 @@
     <Compile Include="../Revcode.Revit/BatchExecutor.cs" Link="BatchExecutor.cs" />
     <Compile Include="../Revcode.Desktop/Protocol.cs" Link="DesktopProtocol.cs" />
     <Compile Include="../Revcode.Desktop/Win32.cs" Link="DesktopWin32.cs" />
+    <Compile Include="../Revcode.Desktop/InputPolicy.cs" Link="DesktopInputPolicy.cs" />
   </ItemGroup>
 </Project>
