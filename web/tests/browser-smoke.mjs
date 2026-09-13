@@ -186,19 +186,40 @@ try {
     page.getByText("Revit connected", { exact: true }),
   ).toBeVisible();
   await expect(page).toHaveURL(`${host.url}/`);
+  await page.getByRole("link", { name: "Skip to message" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Message the assistant")).toBeFocused();
+  expect((await page.waitForResponse((response) => new URL(response.url()).pathname === "/api/state")).status()).toBe(200);
+  expect(await page.evaluate(() => sessionStorage.getItem("revcode.token"))).toBe(host.browserToken);
+  await expect(page).toHaveURL(`${host.url}/`);
   await expect(
     page.getByRole("button", { name: "Send", exact: true }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "C# console", exact: true }).click();
+  await page.locator(".console-button").click();
+  context.document.isReadOnly = true;
+  await send("context", context);
+  await page.getByLabel("Execution mode").selectOption("modify");
+  await expect(page.getByRole("button", { name: "Run C#" })).toBeDisabled();
+  let executeRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/execute") executeRequests++;
+  });
+  await page.locator("#code").press("Control+Enter");
+  // Let any request from the keyboard handler reach the host before checking.
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+  expect(executeRequests).toBe(0);
+  await page.getByLabel("Execution mode").selectOption("query");
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
-  await page.getByRole("button", { name: "Run C#" }).click();
+  await page.locator("#code").press("Control+Enter");
   await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
   await expect(page.locator(".operation")).toHaveCount(1);
   await page.reload();
   await expect(page.locator(".operation")).toHaveCount(1);
   expect(commandCount).toBe(1);
+  context.document.isReadOnly = false;
+  await send("context", context);
 
-  await page.getByRole("button", { name: "C# console", exact: true }).click();
+  await page.locator(".console-button").click();
   await page
     .getByRole("button", { name: "Test rollback", exact: true })
     .click();
@@ -220,6 +241,8 @@ try {
   ).toBeEnabled();
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.getByRole("button", { name: /Set up a provider/ }).click();
   await expect(
@@ -303,7 +326,6 @@ try {
   ).toBeVisible();
   await expect(page.locator("#provider-model")).toHaveValue("local-test-model");
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await page.getByLabel("Message the assistant").fill("Inspect the model.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(
@@ -317,9 +339,8 @@ try {
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("button", { name: "C# console", exact: true }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.locator(".console-button")).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

@@ -1,92 +1,45 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "./style.css";
+import "./styles/globals.css";
+import { ConnectionBanner } from "./components/connection-banner";
+import { Composer, type ComposerHandle } from "./components/composer";
 import {
-  ProviderDialog,
-  type Provider,
-  type AuthState,
-} from "./provider-dialog";
+  ConsolePanel,
+  DocumentTarget,
+  examples,
+  type Mode,
+} from "./components/console-panel";
+import { Conversation } from "./components/conversation";
+import { ExecutionHistory, type Operation } from "./components/execution-history";
+import { ModelControls } from "./components/model-picker";
+import { ProviderDialog } from "./provider-dialog";
+import type { AuthState, Context, Message, ProviderSummary, Settings } from "../../src/host/types";
+import { Sidebar } from "./components/sidebar";
+import { ToastRegion, type ToastLevel, type ToastNotice } from "./components/toasts";
+import { Badge } from "./components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { providerLabel } from "./lib/utils";
+import mark from "./assets/revcode-mark.svg";
+import { TriangleAlert } from "lucide-react";
 
-type Mode = "query" | "modify";
-type Operation = {
-  operationId: string;
-  code: string;
-  mode: Mode;
-  status: string;
-  createdAt: string;
-  result?: unknown;
-  error?: string;
-  logs?: string[];
-  transactionStatus?: string;
-  elapsedMs?: number;
-  diagnostics?: {
-    severity: string;
-    message: string;
-    line?: number;
-    column?: number;
-  }[];
-};
 type HostState = {
   instanceId: string;
   connected: boolean;
   busy: boolean;
-  context: null | {
-    revitVersion: string;
-    revitBuild: string;
-    runtime: string;
-    document: null | {
-      token: string;
-      title: string;
-      isFamily: boolean;
-      isReadOnly: boolean;
-      activeView: string;
-      selection: string[];
-    };
-  };
-  messages: {
-    id: string;
-    role: "user" | "assistant" | "system";
-    text: string;
-  }[];
+  context: Context | null;
+  messages: Message[];
   operations: Operation[];
-  settings: { provider: string; model: string; configured: boolean };
-  providers: Provider[];
+  settings: Settings;
+  providers: ProviderSummary[];
   auth?: AuthState;
 };
-
-const examples: { label: string; mode: Mode; code: string }[] = [
-  {
-    label: "Query levels",
-    mode: "query",
-    code: `return new FilteredElementCollector(ctx.Doc)
-    .OfClass(typeof(Level))
-    .Cast<Level>()
-    .Select(level => new {
-        id = level.UniqueId,
-        name = level.Name,
-        elevationMm = UnitUtils.ConvertFromInternalUnits(
-            level.Elevation, UnitTypeId.Millimeters)
-    })
-    .ToArray();`,
-  },
-  {
-    label: "Create level",
-    mode: "modify",
-    code: `ctx.CheckCancellation();
-var elevation = UnitUtils.ConvertToInternalUnits(3000, UnitTypeId.Millimeters);
-var level = Level.Create(ctx.Doc, elevation);
-ctx.Log("Created level at 3000 mm.");
-return new { id = level.UniqueId, name = level.Name };`,
-  },
-  {
-    label: "Test rollback",
-    mode: "modify",
-    code: `var elevation = UnitUtils.ConvertToInternalUnits(4500, UnitTypeId.Millimeters);
-var level = Level.Create(ctx.Doc, elevation);
-ctx.Log("Created a temporary level; the exception should roll it back.");
-throw new InvalidOperationException("Intentional rollback test. No level should remain.");`,
-  },
-];
 
 function readToken() {
   const fragment = window.location.hash.slice(1);
@@ -137,20 +90,80 @@ async function api<T>(
   return data as T;
 }
 
+const SIDEBAR_KEY = "revcode.sidebar.collapsed";
+
+function readCollapsed() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function StatusPill({
+  hostOnline,
+  revitConnected,
+  busy,
+}: {
+  hostOnline: boolean;
+  revitConnected: boolean;
+  busy: boolean;
+}) {
+  if (!hostOnline)
+    return (
+      <Badge variant="neutral" dot pulse className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+        <span className="text-ink">Offline</span>
+      </Badge>
+    );
+  if (!revitConnected)
+    return (
+      <Badge variant="warn" dot pulse className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+        <span className="text-ink">Connecting</span>
+      </Badge>
+    );
+  return (
+    <Badge variant="accent" dot pulse={busy} className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+      <span className="text-ink">{busy ? "Working" : "Ready"}</span>
+    </Badge>
+  );
+}
+
 function App() {
   const [activeToken, setActiveToken] = useState(token);
   const [state, setState] = useState<HostState | null>(null);
   const [hostOnline, setHostOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
-  const [error, setError] = useState("");
-  const [tab, setTab] = useState<"chat" | "console">("chat");
   const [prompt, setPrompt] = useState("");
   const [code, setCode] = useState(examples[0].code);
   const [mode, setMode] = useState<Mode>("query");
   const [pending, setPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const transcript = useRef<HTMLDivElement>(null);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [notices, setNotices] = useState<ToastNotice[]>([]);
+  const toastId = useRef(0);
+  const composer = useRef<ComposerHandle>(null);
   const submitting = useRef(false);
+
+  const toast = useCallback((message: string, level: ToastLevel = "error") => {
+    const id = ++toastId.current;
+    setNotices((current) => [
+      ...current.slice(-3),
+      { id, level, message, timeout: level === "error" ? 8000 : 5000 },
+    ]);
+  }, []);
+  const dismissToast = useCallback((id: number) => {
+    setNotices((current) => current.filter((notice) => notice.id !== id));
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // Storage may be unavailable; the preference is only a convenience.
+    }
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     const reconnect = () => {
@@ -169,11 +182,7 @@ function App() {
     const controller = new AbortController();
     const poll = async () => {
       try {
-        const next = await api<HostState>(
-          "/api/state",
-          undefined,
-          controller.signal,
-        );
+        const next = await api<HostState>("/api/state", undefined, controller.signal);
         if (!disposed) {
           setState(next);
           setHostOnline(true);
@@ -200,55 +209,64 @@ function App() {
     };
   }, [activeToken]);
 
-  const lastMessage = state?.messages.at(-1);
-  useEffect(() => {
-    const element = transcript.current;
-    if (
-      element &&
-      element.scrollHeight - element.scrollTop - element.clientHeight < 220
-    ) {
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [lastMessage?.text, state?.messages.length]);
-
-  const doc = state?.context?.document;
+  const doc = state?.context?.document ?? null;
   const ready = hostOnline && !!state?.connected && !!doc;
   const busy = pending || !!state?.busy;
   const unknown = state?.operations.some(
     (operation) => operation.status === "unknown",
   );
   const canExecute = ready && !busy && !unknown;
-  const operations = [...(state?.operations || [])].reverse();
+  const operations = [...(state?.operations ?? [])].reverse();
+  const providerName = providerLabel(state?.settings.provider, state?.providers ?? []);
+  const connectionDetail = !hostOnline ? connectionError : "";
+
   function openSettings() {
+    setMobileOpen(false);
     setSettingsOpen(true);
   }
 
-  async function submit(kind: "chat" | "execute") {
-    if (
-      submitting.current ||
-      !canExecute ||
-      (kind === "chat" && !state?.settings.configured)
-    )
-      return;
+  async function refreshState() {
+    setState(await api<HostState>("/api/state"));
+  }
+
+  async function submitChat() {
+    if (submitting.current || !canExecute || !state?.settings.configured) return;
     submitting.current = true;
     setPending(true);
-    setError("");
     try {
-      await api(
-        `/api/${kind}`,
-        kind === "chat"
-          ? { requestId: crypto.randomUUID(), text: prompt.trim() }
-          : {
-              requestId: crypto.randomUUID(),
-              code,
-              mode,
-              transactionName: "Revcode: C# console",
-            },
-      );
-      if (kind === "chat") setPrompt("");
-      setState(await api<HostState>("/api/state"));
+      await api("/api/chat", {
+        requestId: crypto.randomUUID(),
+        text: prompt.trim(),
+      });
+      setPrompt("");
+      composer.current?.focus();
+      await refreshState();
     } catch (reason) {
-      setError(
+      toast(
+        reason instanceof Error
+          ? reason.message
+          : "Request failed. Check operation history before submitting again.",
+      );
+    } finally {
+      submitting.current = false;
+      setPending(false);
+    }
+  }
+
+  async function executeSnippet() {
+    if (submitting.current || !canExecute) return;
+    submitting.current = true;
+    setPending(true);
+    try {
+      await api("/api/execute", {
+        requestId: crypto.randomUUID(),
+        code,
+        mode,
+        transactionName: "Revcode: C# console",
+      });
+      await refreshState();
+    } catch (reason) {
+      toast(
         reason instanceof Error
           ? reason.message
           : "Request failed. Check operation history before submitting again.",
@@ -260,446 +278,201 @@ function App() {
   }
 
   async function cancel() {
-    setError("");
     try {
       await api("/api/cancel", {});
     } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not request cancellation.",
+      toast(
+        reason instanceof Error ? reason.message : "Could not request cancellation.",
       );
+    }
+  }
+
+  async function selectModel(provider: string, model: string) {
+    try {
+      await api("/api/settings", { provider, model });
+      await refreshState();
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "Could not switch models.");
     }
   }
 
   if (!token)
     return (
-      <main className="launch-page">
-        <div className="brand-mark">r/</div>
-        <h1>Open Revcode from Revit</h1>
-        <p>
+      <main className="flex h-dvh flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ink">
+        <img src={mark} alt="" className="size-12 rounded-[10px] shadow-card" />
+        <h1 className="text-lg font-semibold tracking-tight">Open Revcode from Revit</h1>
+        <p className="max-w-sm text-[13px] leading-relaxed text-ink-soft">
           Click the Revcode ribbon button to connect this browser to your Revit
           session.
         </p>
-        <p className="muted">
+        <p className="text-xs text-muted">
           The ribbon supplies a private connection token for this tab.
         </p>
       </main>
     );
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a
-          className="brand"
-          href="#"
-          onClick={(event) => event.preventDefault()}
-          aria-label="Revcode workspace"
-        >
-          <span className="brand-mark">r/</span>
-          <span>
-            revcode<span className="brand-caption">YOUR REVIT WORKSPACE</span>
-          </span>
+    <TooltipProvider>
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink lg:flex-row">
+        <a className="skip-link" href="#prompt" onClick={(event) => {
+          event.preventDefault();
+          composer.current?.focus();
+        }}>
+          Skip to message
         </a>
-        <div className="sidebar-section-label">CONNECTION</div>
-        <div className="connection">
-          <span className={`status-dot ${ready ? "online" : ""}`} />
-          <strong>
-            {!hostOnline
-              ? "Connecting to host"
-              : state?.connected
-                ? "Revit connected"
-                : "Waiting for Revit"}
-          </strong>
-        </div>
-        {state?.context && (
-          <p className="version">
-            Revit {state.context.revitVersion}
-            <br />
-            <span>Build {state.context.revitBuild}</span>
-          </p>
-        )}
-        <div className="document-card">
-          <span className="eyebrow">ACTIVE DOCUMENT</span>
-          <h2>{doc?.title || "No document open"}</h2>
-          <p>
-            {doc
-              ? `${doc.isFamily ? "Family" : "Project"}${doc.isReadOnly ? " · Read only" : ""}`
-              : "Open a project or family in Revit."}
-          </p>
-          {doc && (
-            <>
-              <div className="document-rule" />
-              <span className="eyebrow">VIEW</span>
-              <p className="view-name">{doc.activeView || "—"}</p>
-              <span className="selection-count">
-                {doc.selection.length} selected elements
-              </span>
-            </>
-          )}
-        </div>
-        <nav aria-label="Workspace">
-          <button
-            className={`nav-item ${tab === "chat" ? "active" : ""}`}
-            onClick={() => setTab("chat")}
-          >
-            <span aria-hidden="true">↗</span> Assistant
-          </button>
-          <button
-            className={`nav-item ${tab === "console" ? "active" : ""}`}
-            onClick={() => setTab("console")}
-          >
-            <span aria-hidden="true">⌘</span> C# console
-          </button>
-        </nav>
-        <div className="sidebar-bottom">
-          <button className="provider-button" onClick={openSettings}>
-            <span
-              className={`status-dot ${state?.settings.configured ? "online" : ""}`}
-            />
-            <span>
-              {state?.settings.configured
-                ? state.settings.provider
-                : "Set up a provider"}
-              <small>
-                {state?.settings.configured
-                  ? state.settings.model
-                  : "Connect a model to Pi"}
-              </small>
-            </span>
-            <span aria-hidden="true">⚙</span>
-          </button>
-          <p>Local host · Powered by Pi</p>
-        </div>
-      </aside>
-
-      <main className="workspace">
-        <header className="workspace-header">
-          <div>
-            <span className="eyebrow">
-              REVCODE / {tab === "chat" ? "ASSISTANT" : "DEVELOPER"}
-            </span>
-            <h1>
-              {tab === "chat"
-                ? "Build with your model."
-                : "A direct line to Revit."}
+        <Sidebar
+          hostOnline={hostOnline}
+          revitConnected={!!state?.connected}
+          revitVersion={state?.context?.revitVersion}
+          revitBuild={state?.context?.revitBuild}
+          document={doc}
+          providerConfigured={!!state?.settings.configured}
+          providerName={providerName}
+          providerModel={state?.settings.model ?? ""}
+          collapsed={sidebarCollapsed}
+          onCollapsedChange={setSidebarCollapsed}
+          mobileOpen={mobileOpen}
+          onMobileOpenChange={setMobileOpen}
+          onManageProvider={openSettings}
+          onOpenConsole={() => {
+            setMobileOpen(false);
+            setConsoleOpen(true);
+          }}
+        />
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
+            <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-tight text-ink-soft">
+              Build with your model.
             </h1>
-          </div>
-          <span className={`activity-pill ${busy ? "working" : ""}`}>
-            {busy ? "● Working" : ready ? "● Ready" : "○ Not connected"}
-          </span>
-        </header>
-        {(!hostOnline || !state?.connected) && (
-          <div className="notice" role="status">
-            {connectionError ||
-              "Waiting for the Revit add-in to connect. Open Revcode from the Revit ribbon."}{" "}
-            <span>
-              Reconnecting automatically. Commands are never replayed.
-            </span>
-          </div>
-        )}
-        {unknown && (
-          <div className="notice error" role="alert">
-            An operation has an unknown outcome. Further execution is paused
-            until Revit reports its result. Inspect the model before taking
-            further action.
-          </div>
-        )}
-        {error && (
-          <div className="notice error" role="alert">
-            {error}
-            <button aria-label="Dismiss error" onClick={() => setError("")}>
-              ×
-            </button>
-          </div>
-        )}
-
-        {tab === "chat" ? (
-          <section className="chat-panel" aria-label="Assistant">
+            <StatusPill
+              hostOnline={hostOnline}
+              revitConnected={!!state?.connected}
+              busy={busy}
+            />
+          </header>
+          <ConnectionBanner
+            hostOnline={hostOnline}
+            revitConnected={!!state?.connected}
+            detail={connectionDetail}
+          />
+          {unknown && (
             <div
-              className="transcript"
-              ref={transcript}
-              role="log"
-              aria-label="Conversation"
+              role="alert"
+              className="flex shrink-0 items-start gap-2 border-b border-warn/30 bg-warn-soft px-4 py-1.5 text-xs text-warn sm:px-6"
             >
-              {!state?.messages.length && (
-                <div className="empty-state">
-                  <span className="empty-symbol" aria-hidden="true">
-                    ⌁
-                  </span>
-                  <span className="eyebrow">FROM INTENT TO ELEMENTS</span>
-                  <h2>
-                    What would you like
-                    <br />
-                    to do in Revit?
-                  </h2>
-                  <p>
-                    Ask the assistant to inspect your model or make a change.
-                    Every C# operation appears in the execution history.
-                  </p>
-                  <div className="suggestions">
-                    {[
-                      "List the levels and their elevations.",
-                      "Tell me about the selected elements.",
-                    ].map((text) => (
-                      <button key={text} onClick={() => setPrompt(text)}>
-                        {text}
-                        <span aria-hidden="true">↗</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {state?.messages.map((message) => (
-                <article key={message.id} className={`message ${message.role}`}>
-                  <span className="message-author">
-                    {message.role === "assistant"
-                      ? "Revcode"
-                      : message.role === "user"
-                        ? "You"
-                        : "System"}
-                  </span>
-                  <div className="message-text">{message.text || "…"}</div>
-                </article>
-              ))}
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                An operation has an unknown outcome. Further execution is paused
+                until Revit reports its result. Inspect the model before taking
+                further action.
+              </span>
             </div>
-            <form
-              className="composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submit("chat");
-              }}
-            >
-              {!state?.settings.configured && (
-                <div className="setup-hint">
+          )}
+          <Conversation
+            messages={state?.messages ?? []}
+            busy={busy}
+            connected={hostOnline}
+            configured={!!state?.settings.configured}
+            onSuggestion={(text) => {
+              setPrompt(text);
+              composer.current?.focus();
+            }}
+          />
+          <Composer
+            ref={composer}
+            draft={prompt}
+            onDraftChange={setPrompt}
+            onSubmit={() => void submitChat()}
+            disabled={!hostOnline}
+            submitDisabled={!canExecute || !state?.settings.configured}
+            alert={
+              hostOnline && state && !state.settings.configured ? (
+                <>
                   <button type="button" onClick={openSettings}>
                     Connect a provider
                   </button>{" "}
                   to use the assistant, or{" "}
-                  <button type="button" onClick={() => setTab("console")}>
+                  <button type="button" onClick={() => setConsoleOpen(true)}>
                     test the C# console
                   </button>{" "}
                   without credentials.
-                </div>
-              )}
-              <label htmlFor="prompt" className="sr-only">
-                Message the assistant
-              </label>
-              <textarea
-                id="prompt"
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Describe a change, or ask about your model…"
-                rows={3}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault();
-                    if (prompt.trim()) void submit("chat");
+                </>
+              ) : undefined
+            }
+            canAbort={busy}
+            abortDisabled={pending || !hostOnline}
+            onAbort={() => void cancel()}
+            controls={
+              <>
+                <ModelControls
+                  connected={hostOnline && !!state}
+                  providers={state?.providers ?? []}
+                  selected={
+                    state?.settings ?? { provider: "", model: "" }
                   }
-                }}
-              />
-              <div className="composer-footer">
-                <span>Enter to send · Shift + Enter for a new line</span>
-                {busy ? (
-                  <button
-                    type="button"
-                    className="stop-button"
-                    disabled={pending}
-                    onClick={() => void cancel()}
-                  >
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    className="primary-button"
-                    disabled={
-                      !canExecute ||
-                      !state?.settings.configured ||
-                      !prompt.trim()
-                    }
-                  >
-                    Send <span aria-hidden="true">↑</span>
-                  </button>
-                )}
-              </div>
-            </form>
-          </section>
-        ) : (
-          <section className="console-panel" aria-label="C# console">
-            <div className="console-intro">
-              <h2>Run a C# method body</h2>
-              <p>
-                The same executor the assistant uses. No model or API key
-                required. Access the current document through{" "}
-                <code>ctx.Doc</code>.
-              </p>
-            </div>
-            <div className="example-buttons">
-              {examples.map((example) => (
-                <button
-                  key={example.label}
-                  onClick={() => {
-                    setCode(example.code);
-                    setMode(example.mode);
-                  }}
-                >
-                  {example.label}
-                </button>
-              ))}
-            </div>
-            <div className="editor-header">
-              <label htmlFor="code">snippet.cs</label>
-              <span>object? Execute(RevcodeContext ctx)</span>
-            </div>
-            <textarea
-              className="code-editor"
-              id="code"
-              spellCheck={false}
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              onKeyDown={(event) => {
-                if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                  event.preventDefault();
-                  if (code.trim()) void submit("execute");
-                }
-              }}
-            />
-            <div className="console-actions">
-              <label>
-                Execution mode
-                <select
-                  value={mode}
-                  onChange={(event) => setMode(event.target.value as Mode)}
-                >
-                  <option value="query">Query · no transaction</option>
-                  <option value="modify">Modify · one transaction</option>
-                </select>
-              </label>
-              {busy ? (
-                <button
-                  className="stop-button"
-                  disabled={pending}
-                  onClick={() => void cancel()}
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  className="primary-button"
-                  disabled={
-                    !canExecute ||
-                    !code.trim() ||
-                    (mode === "modify" && doc?.isReadOnly)
+                  onSelectModel={(provider, model) =>
+                    void selectModel(provider, model)
                   }
-                  onClick={() => void submit("execute")}
-                >
-                  Run C# <span aria-hidden="true">↗</span>
-                </button>
-              )}
-            </div>
-            <p className="console-note">
-              Ctrl + Enter to run. Modify calls create a Revit Undo entry when
-              committed. Stop is cooperative; running code must call{" "}
-              <code>ctx.CheckCancellation()</code>.
-            </p>
-          </section>
-        )}
-        <section className="operations" aria-label="Execution history">
-          <div className="section-heading">
-            <h2>Execution history</h2>
-            <span>{operations.length} operations</span>
-          </div>
-          {operations.length === 0 ? (
-            <p className="history-empty">
-              Code, diagnostics, and transaction outcomes will appear here after
-              execution.
-            </p>
-          ) : (
-            operations.map((operation) => (
-              <details
-                className="operation"
-                key={operation.operationId}
-                open={
-                  operation.status === "failed" ||
-                  operation.status === "unknown" ||
-                  !["succeeded", "cancelled"].includes(operation.status)
-                }
-              >
-                <summary>
-                  <span className={`operation-status ${operation.status}`}>
-                    {operation.status === "queued"
-                      ? "Waiting for Revit"
-                      : operation.status}
-                  </span>
-                  <span className="operation-name">
-                    {operation.mode === "modify"
-                      ? "Model change"
-                      : "Model query"}
-                  </span>
-                  <span className="operation-time">
-                    {operation.elapsedMs !== undefined
-                      ? `${(operation.elapsedMs / 1000).toFixed(2)}s`
-                      : ""}
-                  </span>
-                </summary>
-                <div className="operation-body">
-                  <p className="operation-id">
-                    {operation.operationId}
-                    {operation.transactionStatus
-                      ? ` · Transaction: ${operation.transactionStatus}`
-                      : ""}
-                  </p>
-                  <pre>
-                    <code>{operation.code}</code>
-                  </pre>
-                  {operation.error && (
-                    <p className="operation-error">{operation.error}</p>
-                  )}
-                  {operation.diagnostics?.map((diagnostic, index) => (
-                    <p key={index} className="diagnostic">
-                      <strong>{diagnostic.severity}</strong>
-                      {diagnostic.line
-                        ? ` · line ${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ""}`
-                        : ""}
-                      : {diagnostic.message}
-                    </p>
-                  ))}
-                  {!!operation.logs?.length && (
-                    <>
-                      <h3>Logs</h3>
-                      <pre>{operation.logs.join("\n")}</pre>
-                    </>
-                  )}
-                  {operation.result !== undefined && (
-                    <>
-                      <h3>Result</h3>
-                      <pre>{JSON.stringify(operation.result, null, 2)}</pre>
-                    </>
-                  )}
-                </div>
-              </details>
-            ))
-          )}
-        </section>
-      </main>
+                  onManageProvider={openSettings}
+                />
+                <DocumentTarget label={doc?.title ?? "No document"} />
+              </>
+            }
+          />
+        </main>
+        <ExecutionHistory operations={operations} />
 
-      {settingsOpen && state && (
-        <ProviderDialog
-          providers={state.providers}
-          auth={state.auth}
-          selected={state.settings}
-          api={api}
-          refresh={async () => {
-            setState(await api<HostState>("/api/state"));
-          }}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
-    </div>
+        {consoleOpen && (
+          <Dialog
+            open
+            onOpenChange={(next) => {
+              if (!next) setConsoleOpen(false);
+            }}
+          >
+            <DialogContent
+              aria-labelledby="console-title"
+              className="w-[min(680px,calc(100%-2rem))] gap-3"
+            >
+              <DialogHeader>
+                <DialogTitle id="console-title">Run a C# method body</DialogTitle>
+                <DialogDescription>
+                  The same executor the assistant uses. No model or API key
+                  required. Access the current document through{" "}
+                  <code className="rounded-[3px] bg-surface-muted px-1 py-0.5 font-mono text-[0.9em]">
+                    ctx.Doc
+                  </code>
+                  .
+                </DialogDescription>
+              </DialogHeader>
+              <ConsolePanel
+                code={code}
+                onCodeChange={setCode}
+                mode={mode}
+                onModeChange={setMode}
+                busy={busy}
+                pending={pending}
+                canRun={canExecute}
+                onRun={() => void executeSnippet()}
+                onCancel={() => void cancel()}
+                docReadOnly={!!doc?.isReadOnly}
+              />
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {settingsOpen && state && (
+          <ProviderDialog
+            providers={state.providers}
+            auth={state.auth}
+            selected={state.settings}
+            api={api}
+            refresh={refreshState}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
+        <ToastRegion notices={notices} onDismiss={dismissToast} />
+      </div>
+    </TooltipProvider>
   );
 }
 
