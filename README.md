@@ -12,14 +12,14 @@ From PowerShell in this repository:
 
 ```powershell
 npm ci
-npm run check
-./scripts/package.ps1 -RevitYears 2026
-./scripts/install.ps1
+npm run build:install
 ```
+
+`build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. Options follow after ` -- ` (npm does not pass dashed flags): `npm run build:install -- open-revit` reopens Revit after installation, `-- build-only` builds and verifies the package without installing, and `-- revit-years 2025,2026` selects versions. When calling Node directly, dashed forms also work: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
 
 Close Revit before installation. The installer registers a per-user add-in and copies a versioned package under `%LOCALAPPDATA%\Revcode\packages`. It does not require administrator privileges. Revit may show its standard unsigned add-in prompt on first load.
 
-To build all three installed API versions:
+The individual steps behind `build:install` are also available separately:
 
 ```powershell
 ./scripts/package.ps1 -RevitYears 2025,2026,2027
@@ -104,8 +104,8 @@ See [PROTOCOL.md](PROTOCOL.md) for the implemented wire boundary, [PLAN.md](PLAN
 ```powershell
 npm run build       # Host + browser
 npm run check       # Typecheck, host tests, production build
-./scripts/package.ps1 -RevitYears 2026
-./scripts/install.ps1
+npm run build:install -- build-only   # Stage and verify a package without installing
+npm run build:install -- open-revit   # Build, install, and reopen Revit
 ```
 
 Native add-in changes require closing Revit and reinstalling. C# snippets compile on each call and require no restart. Browser assets and Node dependencies are served from the installed versioned package, so rebuilding the repository alone does not update an installed package.
