@@ -1,11 +1,12 @@
 import { expect, it } from 'vitest';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPiAgent } from '../../src/host/pi-agent.js';
 
-it('real Pi SDK advertises exactly one tool and consumes its C# result through a local model fixture', async () => {
+it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
+  const toolName = scenario === 'capture_zoom' ? 'revit_capture_view' : scenario;
   const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-'));
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
@@ -14,7 +15,7 @@ it('real Pi SDK advertises exactly one tool and consumes its C# result through a
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const chunk = (delta: object, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'fixture-response', object: 'chat.completion.chunk', created: 1, model: 'revcode-fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     if (requests.length === 1) {
-      chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'revit_execute_csharp', arguments: JSON.stringify({ code: 'return 7;', mode: 'query' }) } }] });
+      chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: toolName, arguments: JSON.stringify(toolName === 'revit_capture_view' ? { viewId: 'view-1', documentToken: 'doc', ...(scenario === 'capture_zoom' ? { zoomType: 'zoom', zoom: 125 } : {}) } : { code: 'return 7;', mode: 'query' }) } }] });
       chunk({}, 'tool_calls');
     } else { chunk({ role: 'assistant', content: 'There are 7 levels.' }); chunk({}, 'stop'); }
     res.end('data: [DONE]\n\n');
@@ -24,14 +25,25 @@ it('real Pi SDK advertises exactly one tool and consumes its C# result through a
   try {
     const agent = await createPiAgent(dir, dir, runtime => runtime.registerProvider('openai', {
       api: 'openai-completions', baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'fixture-key',
-      models: [{ id: 'revcode-fixture', name: 'Fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }],
+      models: [{ id: 'revcode-fixture', name: 'Fixture', reasoning: false, input: ['text', 'image'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }],
     }));
     let output = ''; let calls = 0;
     await agent.prompt('Count levels', { provider: 'openai', model: 'revcode-fixture', configured: true }, {
       instanceId: 'fixture', revitVersion: '2026', revitBuild: '26.3', runtime: '.NET 8', document: { token: 'doc', title: 'Test', isFamily: false, isReadOnly: false, activeView: 'Level 1', selection: [] },
-    }, [], async input => { calls++; expect(input).toEqual({ code: 'return 7;', mode: 'query' }); return { ...input, operationId: 'op', documentToken: 'doc', createdAt: new Date().toISOString(), status: 'succeeded', result: 7 }; }, value => { output = value; });
+    }, [], async input => { calls++;
+      if (toolName === 'revit_capture_view') {
+        expect(input).toMatchObject({ mode: 'api', documentToken: 'doc' });
+        expect(input.code).toContain(scenario === 'capture_zoom' ? 'ZoomType = ZoomFitType.Zoom, Zoom = 125' : 'ZoomType = ZoomFitType.FitToPage');
+        if (scenario === 'capture_zoom') expect(input.code).not.toContain('PixelSize =');
+        const file = input.code.match(/FilePath = @"([^"]+)"/)![1];
+        await writeFile(file + '.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64'));
+      } else expect(input).toEqual({ code: 'return 7;', mode: 'query' }); return { ...input, operationId: 'op', documentToken: 'doc', createdAt: new Date().toISOString(), status: 'succeeded', result: 7 }; }, value => { output = value; });
     expect(calls).toBe(1); expect(output).toContain('There are 7 levels.');
-    expect(requests[0].tools.map((tool: any) => tool.function.name)).toEqual(['revit_execute_csharp']);
+    expect(requests[0].tools.map((tool: any) => tool.function.name)).toEqual(['revit_execute_csharp', 'revit_capture_view']);
+    if (toolName === 'revit_capture_view') {
+      expect(JSON.stringify(requests[1].messages)).toContain('data:image/png;base64,');
+      expect(await readdir(join(dir, 'captures'))).toEqual([]);
+    }
     expect(requests[1].messages.some((message: any) => message.role === 'tool' && message.content.includes('"result":7'))).toBe(true);
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }); }
 }, 30000);

@@ -1,6 +1,6 @@
 # Revcode
 
-A local, Pi-powered coding assistant for Revit. Click **Revcode** in Revit to open a browser workspace, chat about the active model, or run C# directly. The agent has one modeling tool: `revit_execute_csharp`.
+A local, Pi-powered coding assistant for Revit. Click **Revcode** in Revit to open a browser workspace, chat about the active model, or run C# directly. The agent uses `revit_execute_csharp` for modeling and `revit_capture_view` for visual inspection.
 
 This is an early, full-trust prototype. Use a disposable project for your first test. Running snippets execute inside Revit; an uncooperative script can block its UI. Stop cancels queued work and requests cooperative cancellation, and does not undo earlier committed edits.
 
@@ -100,6 +100,24 @@ return new { id = family.UniqueId, name = family.Name };
 
 For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` can show Revit's conflict prompts. Edit family geometry beforehand in a separate modify call targeted to the family, then verify the loaded family with a query targeted to the project.
 
+## Visual inspection
+
+`revit_capture_view` returns a PNG directly to an image-capable agent model. It accepts optional `documentToken`, `viewId` (a view UniqueId), `pixelSize` (256-2048, default 1536), `zoomType` (`fitToPage` or `zoom`), `zoom` (integer percentage), and `region` (`view` or `visible`). Without a view ID it uses the target document's active view at execution time.
+
+Export sizing follows Autodesk's [ImageExportOptions](https://help.autodesk.com/cloudhelp/2026/ENU/Revit-API-MainReference/files/html/c2e823a1-6eb0-2bf3-f07b-ed46d8f7b70a.htm):
+
+- `zoomType: "fitToPage"` is the default and uses `pixelSize` as the horizontal pixel count.
+- `zoomType: "zoom"` uses `zoom` as the export percentage at 150 DPI. Omitted `zoom` defaults to 50, matching [Revit's Zoom default](https://help.autodesk.com/cloudhelp/2026/ENU/Revit-API-MainReference/files/html/6ab4f8bb-3abb-8c49-eefd-642e9d57a262.htm). The tool accepts integer percentages from 1 to 1000; Revit enforces its own export constraints.
+- `zoom` requires `zoomType: "zoom"`; supplying `pixelSize` in that mode is rejected because Revit would ignore it. Effective sizing options are returned with the capture metadata.
+
+For example, `{ "viewId": "<view-unique-id>", "zoomType": "zoom", "zoom": 100 }` exports at 100%. This controls raster export sizing, not viewport framing or the Revit view scale. To focus on an element, use C# to change the crop/section box or the active viewport before capturing. Percentage sizing can produce images wider than 2048 pixels; the 10 MiB output cap still applies.
+
+The default `view` region exports the whole view using Revit's `SetOfViews`; activation is unnecessary. `visible` exports the current zoomed viewport and requires the target document and view to already be active. This is a Revit image export, not a desktop screenshot. Templates and non-printable views are rejected. Graphics/export failures are returned as `captureError`; they do not imply model changes.
+
+Use C# queries to discover views by name and UniqueId and inspect exact element data. Use C# to adjust camera orientation, crop or section boxes, then capture again. If viewport capture requires changing tabs, call `ctx.UiDoc.RequestViewChange(view)` in a separate API call and verify the active view afterward: the request is asynchronous.
+
+Images require a model whose Pi definition includes image input. Custom endpoints initially declare text input only; update the model's `input` to `["text", "image"]` in the shared `models.json` and refresh providers if the endpoint supports vision. Captures use the existing execution journal and document binding. Temporary PNGs are removed after confirmed completion; uncertain executions retain their unique directory under the instance's `captures` folder. PNG bytes bypass the native JSON result limit and are capped at 10 MiB. Images are retained in Pi session logs but are not shown in browser execution history or carried into later chat turns; recapture when needed.
+
 ## Architecture
 
 ```text
@@ -133,7 +151,7 @@ npm run build:install -- open-revit   # Build, install, and reopen Revit
 
 Native add-in changes require closing Revit and reinstalling. C# snippets compile on each call and require no restart. Browser assets and Node dependencies are served from the installed versioned package, so rebuilding the repository alone does not update an installed package.
 
-The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement the full plan's shared multi-process scheduler, multi-agent workflows, visual capture, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
+The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement the full plan's shared multi-process scheduler, multi-agent workflows, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
 
 To uninstall, close Revit and run `./scripts/uninstall.ps1`. This removes only Revcode's manifests, preserving settings, history, and versioned package files.
 

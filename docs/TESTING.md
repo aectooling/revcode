@@ -64,3 +64,11 @@ Use a new disposable project. Record the Revit executable build, runtime, Revcod
 | Close Revit | Its local host exits; another Revit process is unaffected |
 
 Save/sync, worksharing permissions, family documents, arbitrary API calls, and runtime updates need their own targeted tests before treating them as supported workflows. No tests should mutate an existing user project without a deliberate test instruction.
+
+## View capture smoke check
+
+With an image-capable model and a disposable Revit project, ask the agent to list exportable views and capture a non-active plan or 3D view by UniqueId. Confirm that the image matches the requested view and the active tab stays unchanged. Then zoom the active view and request `region: visible`; confirm the image reflects the viewport. Request visible capture of an inactive view and confirm a useful error without switching tabs. Use a separate API call to request activation, verify the active view in a subsequent query, and capture again.
+
+Also check a template view, a closed document token, a text-only model, and cancellation. No capture should create an Undo entry. Successful captures should leave no PNG in the instance's `captures` directory. Capture images reach the agent within the current turn; browser execution history contains metadata, not an image preview. The automated SDK fixture verifies image delivery, but does not exercise Revit graphics rendering.
+
+Compare captures of the same view with `zoomType: "zoom"` at 50% and 100%; confirm that output dimensions change while viewport framing remains unchanged. Verify omitted zoom uses 50%, default fit-to-page uses 1536 horizontal pixels, and conflicting sizing arguments fail before dispatch. Repeat with `region: "visible"`. Percentage mode uses 150 DPI and may exceed the pixel dimensions allowed by fit-to-page; test the 10 MiB failure guidance with a large export.
