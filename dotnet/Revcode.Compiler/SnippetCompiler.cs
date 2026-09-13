@@ -50,7 +50,7 @@ public static class SnippetCompiler
             var owner = symbol?.ContainingType.ToDisplayString();
             if (owner is "Autodesk.Revit.DB.Transaction" or "Autodesk.Revit.DB.TransactionGroup" or "Autodesk.Revit.DB.SubTransaction")
                 violation = "Revcode owns the transaction. Do not create or manage transactions in snippets.";
-            if (request.Mode != "api" && (owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "Save" or "SaveAs" or "Close" or "SynchronizeWithCentral" or "Export" or "EditFamily"
+            if (request.Mode != "api" && (owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "Save" or "SaveAs" or "Close" or "SynchronizeWithCentral" or "Export" or "ExportImage" or "EditFamily"
                 || owner == "Autodesk.Revit.ApplicationServices.Application" && symbol?.Name is "OpenDocumentFile" or "NewProjectDocument" or "NewFamilyDocument"
                 || owner == "Autodesk.Revit.UI.UIApplication" && symbol?.Name == "OpenAndActivateDocument"
                 || owner == "Autodesk.Revit.DB.Document" && symbol?.Name == "LoadFamily" && symbol.Parameters.FirstOrDefault()?.Type.ToDisplayString() == "Autodesk.Revit.DB.Document"))
