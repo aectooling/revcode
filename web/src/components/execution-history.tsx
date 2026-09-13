@@ -4,7 +4,7 @@ import { Badge } from "./ui/badge";
 export type Operation = {
   operationId: string;
   code: string;
-  mode: "query" | "modify";
+  mode: "query" | "modify" | "api";
   status: string;
   createdAt: string;
   result?: unknown;

@@ -136,6 +136,7 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [code, setCode] = useState(examples[0].code);
   const [mode, setMode] = useState<Mode>("query");
+  const [documentToken, setDocumentToken] = useState("");
   const [pending, setPending] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -210,12 +211,16 @@ function App() {
   }, [activeToken]);
 
   const doc = state?.context?.document ?? null;
-  const ready = hostOnline && !!state?.connected && !!doc;
+  const openDocuments = state?.context?.documents ?? (doc ? [doc] : []);
+  const targetDocument = documentToken ? openDocuments.find(d => d.token === documentToken) : doc;
+  const ready = hostOnline && !!state?.connected;
   const busy = pending || !!state?.busy;
   const unknown = state?.operations.some(
     (operation) => operation.status === "unknown",
   );
   const canExecute = ready && !busy && !unknown;
+  const canRunSnippet = canExecute && (!documentToken || !!targetDocument)
+    && (mode !== "modify" || (!!targetDocument && !targetDocument.isReadOnly));
   const operations = [...(state?.operations ?? [])].reverse();
   const providerName = providerLabel(state?.settings.provider, state?.providers ?? []);
   const connectionDetail = !hostOnline ? connectionError : "";
@@ -254,7 +259,7 @@ function App() {
   }
 
   async function executeSnippet() {
-    if (submitting.current || !canExecute) return;
+    if (submitting.current || !canRunSnippet) return;
     submitting.current = true;
     setPending(true);
     try {
@@ -262,6 +267,7 @@ function App() {
         requestId: crypto.randomUUID(),
         code,
         mode,
+        ...(documentToken ? { documentToken } : {}),
         transactionName: "Revcode: C# console",
       });
       await refreshState();
@@ -437,7 +443,7 @@ function App() {
                 <DialogTitle id="console-title">Run a C# method body</DialogTitle>
                 <DialogDescription>
                   The same executor the assistant uses. No model or API key
-                  required. Access the current document through{" "}
+                  required. Access the target document through{" "}
                   <code className="rounded-[3px] bg-surface-muted px-1 py-0.5 font-mono text-[0.9em]">
                     ctx.Doc
                   </code>
@@ -449,12 +455,16 @@ function App() {
                 onCodeChange={setCode}
                 mode={mode}
                 onModeChange={setMode}
+                documentToken={documentToken}
+                onDocumentTokenChange={setDocumentToken}
+                documents={openDocuments}
+                activeDocumentTitle={doc?.title}
                 busy={busy}
                 pending={pending}
-                canRun={canExecute}
+                canRun={canRunSnippet}
                 onRun={() => void executeSnippet()}
                 onCancel={() => void cancel()}
-                docReadOnly={!!doc?.isReadOnly}
+                docReadOnly={!!targetDocument?.isReadOnly}
               />
             </DialogContent>
           </Dialog>

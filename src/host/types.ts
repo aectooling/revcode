@@ -1,10 +1,11 @@
 export interface Context {
   instanceId: string; revitVersion: string; revitBuild: string; runtime: string;
   document: null | { token: string; title: string; isFamily: boolean; isReadOnly: boolean; activeView: string; selection: string[] };
+  documents?: NonNullable<Context['document']>[];
 }
-export interface ExecuteInput { code: string; usings?: string[]; mode: 'query' | 'modify'; transactionName?: string }
+export interface ExecuteInput { code: string; usings?: string[]; mode: 'query' | 'modify' | 'api'; documentToken?: string | null; transactionName?: string }
 export interface Operation extends ExecuteInput {
-  operationId: string; documentToken: string; createdAt: string; status: string;
+  operationId: string; documentToken: string | null; createdAt: string; status: string;
   result?: unknown; logs?: string[]; diagnostics?: unknown[]; error?: string; transactionStatus?: string; elapsedMs?: number;
 }
 export interface Settings { provider: string; model: string; configured: boolean }

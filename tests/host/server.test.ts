@@ -25,6 +25,38 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000) {
 }
 
 describe('authenticated Revit host', () => {
+  it('targets a non-active document and preserves the explicit binding in the journal', async () => {
+    const { api, native, dealer, host, dir } = await setup();
+    const target = { ...context.document, token: 'project-2', title: 'Other project' };
+    await native('context', { ...context, documents: [context.document, target] });
+    await expect.poll(() => host.snapshot().context?.documents?.length).toBe(2);
+    expect((await api('execute', { requestId: 'other-doc-001', code: 'return ctx.Doc.Title;', mode: 'modify', documentToken: target.token })).status).toBe(202);
+    const [frame] = await dealer.receive();
+    expect(JSON.parse(frame.toString()).command).toMatchObject({ documentToken: target.token, mode: 'modify' });
+    expect(JSON.parse(await readFile(join(dir, 'journal.json'), 'utf8')).operations[0].documentToken).toBe(target.token);
+  });
+
+  it('rejects stale, invalid and read-only targets without falling back to the active document', async () => {
+    const { api, native, host } = await setup();
+    await native('context', { ...context, documents: [context.document, { ...context.document, token: 'readonly', isReadOnly: true }] });
+    await expect.poll(() => host.snapshot().context?.documents?.length).toBe(2);
+    const input = { requestId: 'invalid-doc-01', code: 'return 1;', mode: 'modify' };
+    expect((await api('execute', { ...input, documentToken: 'closed' })).status).toBe(409);
+    expect((await api('execute', { ...input, documentToken: 'readonly' })).status).toBe(409);
+    expect((await api('execute', { ...input, documentToken: 42 })).status).toBe(400);
+    expect((await api('execute', { ...input, documentToken: null })).status).toBe(409);
+    expect(host.snapshot().operations).toHaveLength(0);
+  });
+
+  it.each(['query', 'api'])('allows %s with no active document', async mode => {
+    const { api, native, dealer, host } = await setup();
+    await native('context', { ...context, document: null, documents: [] });
+    await expect.poll(() => host.snapshot().context?.document).toBeNull();
+    expect((await api('execute', { requestId: 'no-doc-00001', code: 'return ctx.Documents.Length;', mode })).status).toBe(202);
+    const [frame] = await dealer.receive();
+    expect(JSON.parse(frame.toString()).command).toMatchObject({ documentToken: null, mode });
+  });
+
   it('rejects browser/native credential confusion and hostile browser origins', async () => {
     const { host, api, native } = await setup();
     expect((await api('state', undefined, 'native-secret')).status).toBe(401);

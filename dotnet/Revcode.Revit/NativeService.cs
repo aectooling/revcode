@@ -98,7 +98,10 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         if (uiDoc?.Document is { IsValidObject: true } document)
             doc = new(documents.GetToken(document), document.Title, document.IsFamilyDocument, document.IsReadOnly,
                 document.ActiveView?.Name ?? "", uiDoc.Selection.GetElementIds().Take(100).Select(x => document.GetElement(x)?.UniqueId ?? "").Where(x => x.Length > 0).ToArray());
-        return new(instanceId, app.Application.VersionNumber, app.Application.VersionBuild, RuntimeInformation.FrameworkDescription, doc);
+        var openDocuments = app.Application.Documents.Cast<Document>().Where(x => x.IsValidObject && !x.IsLinked)
+            .Select(x => doc?.Token == documents.GetToken(x) ? doc! : new DocumentSnapshot(documents.GetToken(x), x.Title,
+                x.IsFamilyDocument, x.IsReadOnly, "", [])).ToArray();
+        return new(instanceId, app.Application.VersionNumber, app.Application.VersionBuild, RuntimeInformation.FrameworkDescription, doc, openDocuments);
     }
 
     private async Task StartAsync()
@@ -243,7 +246,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         if (!operations.TryAdd(command.OperationId, operation)) return;
         if (fenced) { Finish(operation, "unknown", "Execution is fenced after an unresolved transaction. Restart Revit after inspecting the model."); return; }
         if (Interlocked.CompareExchange(ref active, 1, 0) != 0) { Finish(operation, "failed", "Another native operation is still active.", release: false); return; }
-        if (command.Mode is not ("query" or "modify") || string.IsNullOrWhiteSpace(command.Code) || command.DocumentToken is null)
+        if (command.Mode is not ("query" or "modify" or "api") || string.IsNullOrWhiteSpace(command.Code) || command.Mode == "modify" && command.DocumentToken is null)
         { Finish(operation, "failed", "Invalid execution request."); return; }
         _ = CompileAsync(operation);
     }
@@ -260,7 +263,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             using var registration = linked.Token.Register(() => { try { if (!worker.HasExited) worker.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } });
             var output = worker.StandardOutput.ReadToEndAsync(linked.Token);
             var errors = worker.StandardError.ReadToEndAsync(linked.Token);
-            await worker.StandardInput.WriteAsync(JsonSerializer.Serialize(new { code = operation.Command.Code, usings = operation.Command.Usings, references }, Json).AsMemory(), linked.Token);
+            await worker.StandardInput.WriteAsync(JsonSerializer.Serialize(new { code = operation.Command.Code, usings = operation.Command.Usings, mode = operation.Command.Mode, references }, Json).AsMemory(), linked.Token);
             worker.StandardInput.Close();
             await worker.WaitForExitAsync(linked.Token);
             var result = JsonSerializer.Deserialize<CompileResult>(await output, Json) ?? throw new InvalidOperationException("Compiler returned invalid output.");
@@ -292,24 +295,27 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             operation.Cancellation.Token.ThrowIfCancellationRequested();
             var current = Capture(app);
             Volatile.Write(ref snapshot, current);
-            if (current.Document is null || current.Document.Token != operation.Command.DocumentToken)
-                throw new InvalidOperationException("The target document is no longer active. Submit a new operation for the current document.");
-            var document = app.ActiveUIDocument.Document;
-            if (document.IsModifiable || document.IsReadOnly && operation.Command.Mode == "modify")
+            var document = operation.Command.DocumentToken is { } token
+                ? app.Application.Documents.Cast<Document>().SingleOrDefault(x => x.IsValidObject && !x.IsLinked && documents.GetToken(x) == token)
+                    ?? throw new InvalidOperationException("The target document is no longer open. Query the open documents before retrying.")
+                : null;
+            if (document is null && operation.Command.Mode == "modify") throw new InvalidOperationException("Modify requires a target document.");
+            if (document != null && (document.IsModifiable || document.IsReadOnly && operation.Command.Mode == "modify"))
                 throw new InvalidOperationException("The document is read-only or already has an active transaction.");
             Volatile.Write(ref operation.Update, new(operation.Command.OperationId, "running", Diagnostics: operation.Diagnostics));
-            ExecuteScript(app, operation);
+            ExecuteScript(app, document, operation);
+            try { Volatile.Write(ref snapshot, Capture(app)); } catch { /* Refresh on next idle after document transitions. */ }
         }
         catch (OperationCanceledException) { Finish(operation, "cancelled", "Execution cancelled before starting."); }
         catch (Exception ex) { Finish(operation, "failed", ex.Message); }
         finally { operation.Assembly = null; operation.Pdb = null; }
     }
 
-    private void ExecuteScript(UIApplication app, Operation operation)
+    private void ExecuteScript(UIApplication app, Document? document, Operation operation)
     {
         try
         {
-            var outcome = ScriptExecutor.Execute(app, operation.Command.Mode!, operation.Command.TransactionName,
+            var outcome = ScriptExecutor.Execute(app, document, documents.GetToken, operation.Command.Mode!, operation.Command.TransactionName,
                 operation.Assembly!, operation.Pdb, operation.Cancellation.Token);
             if (outcome.Status == "unknown") fenced = true;
             Finish(operation, outcome.Status, outcome.Error, outcome.Result, outcome.Logs, outcome.TransactionStatus);

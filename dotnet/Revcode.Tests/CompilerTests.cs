@@ -17,7 +17,7 @@ public sealed class CompilerTests : IDisposable
         Directory.CreateDirectory(folder);
         var bcl = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
         var stub = CSharpCompilation.Create("TestContract", [CSharpSyntaxTree.ParseText("""
-            namespace Autodesk.Revit.DB { public class Document { public void Save() {} } public class Transaction { public Transaction(Document doc) {} } }
+            namespace Autodesk.Revit.DB { public class Document { public void Save() {} public void LoadFamily(Document target) {} public void LoadFamily(string path) {} } public class Transaction { public Transaction(Document doc) {} } }
             namespace Autodesk.Revit.UI { public class UIApplication {} }
             namespace Revcode.Contracts {
                 public class RevcodeContext { public Autodesk.Revit.DB.Document Doc => new(); public void CheckCancellation() {} }
@@ -64,6 +64,20 @@ public sealed class CompilerTests : IDisposable
     {
         Assert.Null(SnippetCompiler.Compile(new("return 1;", ["System; class Escape {}"], references)).Assembly);
         Assert.Null(Compile(new string(' ', 65536) + "return 1;").Assembly);
+    }
+
+    [Fact]
+    public void AllowsDocumentOperationsOnlyInApiModeButStillOwnsTransactions()
+    {
+        foreach (var code in new[] { "ctx.Doc.Save(); return null;", "ctx.Doc.LoadFamily(ctx.Doc); return null;" })
+        {
+            Assert.NotNull(SnippetCompiler.Compile(new(code, null, references, "api")).Assembly);
+            Assert.Null(SnippetCompiler.Compile(new(code, null, references, "modify")).Assembly);
+            Assert.Null(Compile(code).Assembly);
+        }
+        Assert.NotNull(SnippetCompiler.Compile(new("ctx.Doc.LoadFamily(\"family.rfa\"); return null;", null, references, "modify")).Assembly);
+        Assert.Null(SnippetCompiler.Compile(new("var tx = new Transaction(ctx.Doc); return null;", null, references, "api")).Assembly);
+        Assert.Null(SnippetCompiler.Compile(new("return 1;", null, references, "invalid")).Assembly);
     }
 
     [Fact]

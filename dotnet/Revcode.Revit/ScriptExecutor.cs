@@ -14,13 +14,14 @@ internal sealed record ExecutionOutcome(string Status, JsonElement? Result, stri
 internal static class ScriptExecutor
 {
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static ExecutionOutcome Execute(UIApplication app, string mode, string? transactionName, byte[] assembly, byte[]? pdb, CancellationToken cancellation)
+    public static ExecutionOutcome Execute(UIApplication app, Document? document, Func<Document, string> documentToken, string mode, string? transactionName, byte[] assembly, byte[]? pdb, CancellationToken cancellation)
     {
         var loadContext = new SnippetLoadContext();
         Transaction? transaction = null;
         var logs = new List<string>();
         var logChars = 0;
         var transactionStatus = "NotStarted";
+        var scriptStarted = false;
         try
         {
             using var dllStream = new MemoryStream(assembly);
@@ -30,18 +31,19 @@ internal static class ScriptExecutor
             cancellation.ThrowIfCancellationRequested();
             if (mode == "modify")
             {
-                transaction = new Transaction(app.ActiveUIDocument.Document, "Revcode: " + (string.IsNullOrWhiteSpace(transactionName) ? "C# edit" : transactionName[..Math.Min(100, transactionName.Length)]));
+                transaction = new Transaction(document ?? throw new InvalidOperationException("Modify requires a target document."), "Revcode: " + (string.IsNullOrWhiteSpace(transactionName) ? "C# edit" : transactionName[..Math.Min(100, transactionName.Length)]));
                 if (transaction.Start() != TransactionStatus.Started) throw new InvalidOperationException("Could not start the Revit transaction.");
                 transactionStatus = "Started";
                 transaction.SetFailureHandlingOptions(transaction.GetFailureHandlingOptions()
                     .SetFailuresPreprocessor(new FailureCollector(logs)).SetClearAfterRollback(true).SetForcedModalHandling(true));
             }
-            var context = new RevcodeContext(app, cancellation, text =>
+            var context = new RevcodeContext(app, document, documentToken, cancellation, text =>
             {
                 if (logs.Count >= 100 || logChars >= 16000) return;
                 var line = text[..Math.Min(text.Length, Math.Min(2000, 16000 - logChars))];
                 logs.Add(line); logChars += line.Length;
             });
+            scriptStarted = true;
             var value = script.Execute(context);
             cancellation.ThrowIfCancellationRequested();
             // Serialize in API context before commit, so invalid return values roll back edits.
@@ -58,10 +60,12 @@ internal static class ScriptExecutor
                 if (status == TransactionStatus.Pending) return new("unknown", null, logs.ToArray(), "Revit transaction is pending. Inspect the model before further execution.", transactionStatus);
                 if (status != TransactionStatus.Committed) return new("failed", null, logs.ToArray(), "Revit rolled back the transaction during failure handling.", transactionStatus);
             }
-            return new("succeeded", result, logs.ToArray(), null, transactionStatus);
+            return new("succeeded", result, logs.ToArray(), null, mode == "api" ? "ApiManaged" : transactionStatus);
         }
         catch (Exception ex)
         {
+            if (mode == "api" && scriptStarted)
+                return new("unknown", null, logs.ToArray(), ex.GetBaseException().Message + "; API operations may already have taken effect. Inspect Revit before continuing.", "Unknown");
             try
             {
                 if (transaction?.GetStatus() == TransactionStatus.Started) transactionStatus = transaction.RollBack().ToString();

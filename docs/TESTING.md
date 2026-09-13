@@ -49,7 +49,12 @@ Use a new disposable project. Record the Revit executable build, runtime, Revcod
 | Undo in Revit | The successful edit disappears in one normal Undo step |
 | Create then throw | `failed`, `RolledBack`, no created level remains |
 | Return an unsupported Revit object after edit | Serialization fails before commit; edit rolls back |
-| Switch document before a queued call runs | Stale target rejected; new active model unchanged |
+| Switch document before a queued call runs | Edit stays bound to the original open target; new active model unchanged |
+| Close the target before a queued call runs | Closed token rejected; no fallback to the active model |
+| Edit an inactive project by token | Transaction commits in that project; active project unchanged |
+| Load an open family into another project in API mode | `succeeded`, `ApiManaged`; follow-up query finds the family in the target project |
+| Open/create a document with no active model in API mode | New document is discoverable via `ctx.Documents` and the next context snapshot |
+| Throw after an API side effect | `unknown`; no claim that the earlier effect rolled back; subsequent execution fenced |
 | Revit modal/edit command active | Waiting status, no background-thread API access |
 | Cancel while queued | Operation cancels without starting a model edit |
 | Cancel cooperative running code | Current transaction rolls back at a cancellation check |

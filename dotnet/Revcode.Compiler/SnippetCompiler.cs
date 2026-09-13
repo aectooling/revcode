@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Revcode.Compiler;
 
-public sealed record CompileRequest(string Code, string[]? Usings, string[] References);
+public sealed record CompileRequest(string Code, string[]? Usings, string[] References, string Mode = "query");
 public sealed record CompileDiagnostic(string Severity, string Message, int? Line, int? Column);
 public sealed record CompileResponse(string? Assembly, string? Pdb, CompileDiagnostic[] Diagnostics);
 
@@ -15,6 +15,7 @@ public static class SnippetCompiler
 {
     public static CompileResponse Compile(CompileRequest request)
     {
+        if (request.Mode is not ("query" or "modify" or "api")) return Error("Mode must be query, modify or api.");
         if (string.IsNullOrWhiteSpace(request.Code) || Encoding.UTF8.GetByteCount(request.Code) > 65536)
             return Error("Provide a nonempty C# method body of at most 64 KiB.");
         var namespaces = new[] { "System", "System.Linq", "System.Collections.Generic", "Autodesk.Revit.DB", "Autodesk.Revit.UI", "Revcode.Contracts" }
@@ -49,8 +50,11 @@ public static class SnippetCompiler
             var owner = symbol?.ContainingType.ToDisplayString();
             if (owner is "Autodesk.Revit.DB.Transaction" or "Autodesk.Revit.DB.TransactionGroup" or "Autodesk.Revit.DB.SubTransaction")
                 violation = "Revcode owns the transaction. Do not create or manage transactions in snippets.";
-            if (owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "Save" or "SaveAs" or "Close" or "SynchronizeWithCentral" or "Export")
-                violation = "Save, close, sync and export are outside the supported snippet contract.";
+            if (request.Mode != "api" && (owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "Save" or "SaveAs" or "Close" or "SynchronizeWithCentral" or "Export" or "EditFamily"
+                || owner == "Autodesk.Revit.ApplicationServices.Application" && symbol?.Name is "OpenDocumentFile" or "NewProjectDocument" or "NewFamilyDocument"
+                || owner == "Autodesk.Revit.UI.UIApplication" && symbol?.Name == "OpenAndActivateDocument"
+                || owner == "Autodesk.Revit.DB.Document" && symbol?.Name == "LoadFamily" && symbol.Parameters.FirstOrDefault()?.Type.ToDisplayString() == "Autodesk.Revit.DB.Document"))
+                violation = "Use api mode for document lifecycle, export and document-to-document family loading operations.";
             if (owner?.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal) == true || owner is "System.Threading.Thread" or "System.Diagnostics.Process")
                 violation = "Background tasks, threads and process launches are unsupported in snippets.";
             if (violation != null)

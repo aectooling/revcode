@@ -2,7 +2,7 @@ import { Box, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "./ui/button";
 
-export type Mode = "query" | "modify";
+export type Mode = "query" | "modify" | "api";
 
 export const examples: { label: string; mode: Mode; code: string }[] = [
   {
@@ -57,6 +57,10 @@ export function ConsolePanel({
   onCodeChange,
   mode,
   onModeChange,
+  documentToken,
+  onDocumentTokenChange,
+  documents,
+  activeDocumentTitle,
   busy,
   pending,
   canRun,
@@ -68,6 +72,10 @@ export function ConsolePanel({
   onCodeChange(value: string): void;
   mode: Mode;
   onModeChange(mode: Mode): void;
+  documentToken: string;
+  onDocumentTokenChange(token: string): void;
+  documents: { token: string; title: string; isFamily: boolean }[];
+  activeDocumentTitle?: string;
   busy: boolean;
   pending: boolean;
   canRun: boolean;
@@ -112,6 +120,19 @@ export function ConsolePanel({
         className="min-h-[220px] w-full resize-y rounded-md border border-line bg-surface p-3 font-mono text-[13px] leading-relaxed outline-none transition-colors hover:border-line-strong focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/15"
       />
       <div className="flex flex-wrap items-center justify-between gap-2">
+        <label htmlFor="document-target" className="flex min-w-0 items-center gap-2 text-xs font-medium text-ink-soft">
+          Target document
+          <select
+            id="document-target"
+            value={documentToken}
+            onChange={(event) => onDocumentTokenChange(event.target.value)}
+            className="h-8 min-w-0 max-w-[280px] rounded-sm border border-line bg-surface px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <option value="">Active document · {activeDocumentTitle ?? "none"}</option>
+            {documentToken && !documents.some(d => d.token === documentToken) && <option value={documentToken}>Closed document · select another</option>}
+            {documents.map(d => <option key={d.token} value={d.token}>{d.title} · {d.isFamily ? "Family" : "Project"} · {d.token.slice(0, 8)}</option>)}
+          </select>
+        </label>
         <label htmlFor="mode" className="flex items-center gap-2 text-xs font-medium text-ink-soft">
           Execution mode
           <select
@@ -122,6 +143,7 @@ export function ConsolePanel({
           >
             <option value="query">Query · no transaction</option>
             <option value="modify">Modify · one transaction</option>
+            <option value="api">API · document operations</option>
           </select>
         </label>
         {busy ? (

@@ -11,6 +11,7 @@ import { createHost } from "../../dist/host/server.js";
 const dataDir = await mkdtemp(join(tmpdir(), "revcode-browser-"));
 let key;
 let commandCount = 0;
+let lastCommand;
 let heldOperation;
 const agent = {
   providers: [
@@ -120,6 +121,7 @@ const context = {
 };
 const send = (type, payload) =>
   native.send(JSON.stringify({ type, token: "native-smoke-token", payload }));
+context.documents = [context.document, { ...context.document, token: "other-doc", title: "Other open project" }];
 await send("context", context);
 const heartbeat = setInterval(
   () => void send("context", context).catch(() => {}),
@@ -143,6 +145,7 @@ const nativeLoop = (async () => {
         continue;
       }
       commandCount++;
+      lastCommand = command;
       await send("operation", {
         operationId: command.operationId,
         status: "running",
@@ -208,11 +211,16 @@ try {
   // Let any request from the keyboard handler reach the host before checking.
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
   expect(executeRequests).toBe(0);
+  await page.getByLabel("Target document").selectOption("other-doc");
+  await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
+  await page.getByLabel("Execution mode").selectOption("api");
+  await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
   await page.getByLabel("Execution mode").selectOption("query");
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
   await page.locator("#code").press("Control+Enter");
   await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
   await expect(page.locator(".operation")).toHaveCount(1);
+  expect(lastCommand.documentToken).toBe("other-doc");
   await page.reload();
   await expect(page.locator(".operation")).toHaveCount(1);
   expect(commandCount).toBe(1);

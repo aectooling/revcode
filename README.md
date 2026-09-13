@@ -77,7 +77,28 @@ return new FilteredElementCollector(ctx.Doc)
 
 Available context: `ctx.Doc`, `ctx.UiDoc`, `ctx.UiApp`, `ctx.Log(string)`, and `ctx.CheckCancellation()`. Default imports include System, LINQ, generic collections, and Autodesk.Revit.DB/UI. Use query mode for inspection and modify mode for edits. Return materialized JSON-safe data, not Revit elements, lazy collectors, tasks, or delegates.
 
-Revcode owns transactions. Do not open transactions, start background tasks, retain Revit objects, save/sync/close documents, or perform external side effects. The compiler detects common unsupported patterns; it is not a sandbox. A modify call commits as one Undo item or rolls back on a confirmed execution failure. An unknown outcome blocks subsequent execution and must be inspected rather than automatically retried.
+The agent and console can target any open non-linked document by its session token. Omitting `documentToken` binds the active document at submission; switching tabs never redirects submitted work. `ctx.Doc` is the bound target, while `ctx.UiDoc` always refers to the active UI document. Discover documents with `ctx.Documents`, `ctx.GetDocumentToken(document)` and `ctx.GetDocument(token)`. Closed targets are rejected.
+
+Revcode owns the target transaction in modify mode. Use separate calls for edits to separate documents. Do not open your own transactions, start background tasks or retain Revit objects. Use `api` mode for document creation/opening, EditFamily, family-document loading, save/sync/close and export. It opens no wrapper transaction and has no whole-call rollback or single-Undo guarantee. Revit API restrictions still apply. Synchronous task-related file access is allowed. Query and API modes work with no document open; `ctx.Doc` then throws, but `ctx.UiApp` and `ctx.Documents` remain available.
+
+The compiler detects common unsupported patterns; it is not a sandbox. A modify call commits as one Undo item or rolls back on a confirmed execution failure. Successful API calls report `ApiManaged`; check API return values and query afterward. Exceptions, cancellation or invalid results after an API snippet starts report `unknown`, because earlier effects may persist. An unknown outcome blocks subsequent execution and must be inspected rather than automatically retried.
+
+To load an open family into a project, first query:
+
+```csharp
+return ctx.Documents.Select(d => new {
+    token = ctx.GetDocumentToken(d), title = d.Title, isFamily = d.IsFamilyDocument
+}).ToArray();
+```
+
+Choose the project as the target, select **API** mode, and run:
+
+```csharp
+var family = ctx.GetDocument("<family token>").LoadFamily(ctx.Doc);
+return new { id = family.UniqueId, name = family.Name };
+```
+
+For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` can show Revit's conflict prompts. Edit family geometry beforehand in a separate modify call targeted to the family, then verify the loaded family with a query targeted to the project.
 
 ## Architecture
 
@@ -112,7 +133,7 @@ npm run build:install -- open-revit   # Build, install, and reopen Revit
 
 Native add-in changes require closing Revit and reinstalling. C# snippets compile on each call and require no restart. Browser assets and Node dependencies are served from the installed versioned package, so rebuilding the repository alone does not update an installed package.
 
-The prototype has one execution owner per Revit process, one active-document target per call, and one transaction per modify call. It does not implement the full plan's shared multi-process scheduler, multi-agent workflows, visual capture, NuGet dependencies, cross-document editing, automatic save/sync, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
+The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement the full plan's shared multi-process scheduler, multi-agent workflows, visual capture, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
 
 To uninstall, close Revit and run `./scripts/uninstall.ps1`. This removes only Revcode's manifests, preserving settings, history, and versioned package files.
 
