@@ -83,7 +83,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
                   {operation.steps?.map((step, index) => {
                     const receipt = (operation.result as { steps?: { status: string; result?: unknown; error?: string }[] } | undefined)?.steps?.[index];
                     return <details key={index} className="rounded border border-line p-2">
-                      <summary>{index + 1}. {step.name} · {receipt?.status ?? ((operation.transactionStatus === "NotStarted" || ["failed", "cancelled"].includes(operation.status)) ? "notRun" : operation.status === "unknown" ? "unknown" : "awaiting outcome")}</summary>
+                      <summary>{index + 1}. {step.name} Â· {receipt?.status ?? ((operation.transactionStatus === "NotStarted" || ["failed", "cancelled"].includes(operation.status)) ? "notRun" : operation.status === "unknown" ? "unknown" : "awaiting outcome")}</summary>
                       <pre className="overflow-auto whitespace-pre-wrap">{step.code}</pre>
                       {receipt && <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(receipt, null, 2)}</pre>}
                     </details>;

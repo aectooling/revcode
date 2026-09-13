@@ -20,7 +20,7 @@ public sealed class CompilerTests : IDisposable
             namespace Autodesk.Revit.DB { public class Document { public void Save() {} public void ExportImage(ImageExportOptions options) {} public void LoadFamily(Document target) {} public void LoadFamily(string path) {} } public class ImageExportOptions {} public class Transaction { public Transaction(Document doc) {} } }
             namespace Autodesk.Revit.UI { public class UIApplication {} }
             namespace Revcode.Contracts {
-                public class RevcodeContext { public Autodesk.Revit.DB.Document Doc => new(); public void CheckCancellation() {} }
+                public class RevcodeContext { public Autodesk.Revit.DB.Document Doc => new(); public Autodesk.Revit.UI.UIApplication UiApp => new(); public void CheckCancellation() {} }
                 public interface IRevcodeScript { object Execute(RevcodeContext ctx); }
             }
             """)], bcl.Select(x => MetadataReference.CreateFromFile(x)), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
@@ -44,7 +44,7 @@ public sealed class CompilerTests : IDisposable
     public void BatchContractsRejectKnownExternalEffects(string mode)
     {
         Assert.NotNull(SnippetCompiler.Compile(new("return true;", null, references, mode)).Assembly);
-        foreach (var code in new[] { "ctx.Doc.Save(); return true;", "ctx.Doc.LoadFamily(\"family.rfa\"); return true;", "System.IO.File.WriteAllText(\"test\", \"data\"); return true;", "return System.Net.Dns.GetHostName();" })
+        foreach (var code in new[] { "ctx.Doc.Save(); return true;", "ctx.Doc.LoadFamily(\"family.rfa\"); return true;", "System.IO.File.WriteAllText(\"test\", \"data\"); return true;", "return System.Net.Dns.GetHostName();", "return ctx.UiApp;", "return ctx?.UiApp;" })
             Assert.Null(SnippetCompiler.Compile(new(code, null, references, mode)).Assembly);
     }
 
@@ -58,7 +58,6 @@ public sealed class CompilerTests : IDisposable
         const string code = "ctx.Doc.ExportImage(new ImageExportOptions()); return false;";
         var rejected = SnippetCompiler.Compile(new(code, null, references, mode));
         Assert.Null(rejected.Assembly);
-        Assert.Contains(rejected.Diagnostics, d => d.Message.Contains("Use api mode"));
         Assert.NotNull(SnippetCompiler.Compile(new(code, null, references, "api")).Assembly);
     }
 

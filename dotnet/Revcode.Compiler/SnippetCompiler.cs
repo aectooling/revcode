@@ -65,7 +65,7 @@ public static class SnippetCompiler
                     || owner == "Autodesk.Revit.DB.Document" && symbol?.Name is "LoadFamily" or "LoadFamilySymbol"
                     || owner == "Revcode.Contracts.RevcodeContext" && symbol?.Name == "GetDocument")
                     violation = "Batches permit only transaction-backed edits to ctx.Doc; external effects and other-document access are unsupported.";
-                if (node is MemberAccessExpressionSyntax member && model.GetSymbolInfo(member).Symbol is IPropertySymbol property
+                if (node is MemberAccessExpressionSyntax or MemberBindingExpressionSyntax && model.GetSymbolInfo(node).Symbol is IPropertySymbol property
                     && property.ContainingType.ToDisplayString() == "Revcode.Contracts.RevcodeContext" && property.Name is "UiApp" or "UiDoc" or "Documents")
                     violation = "Use ctx.Doc in batches; UI and other-document access are unsupported.";
             }

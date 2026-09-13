@@ -162,7 +162,7 @@ export function ConsolePanel({
           >
             <option value="query">Query · no transaction</option>
             <option value="modify">Modify · one transaction</option>
-            <option value="batch">Batch � all steps or rollback</option>
+            <option value="batch">Batch · all steps or rollback</option>
             <option value="api">API · document operations</option>
           </select>
         </label>
