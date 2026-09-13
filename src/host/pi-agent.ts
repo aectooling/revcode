@@ -53,7 +53,7 @@ export async function createPiAgent(dataDir: string, userDir = dataDir, configur
         config.providers[provider.id] = { name: provider.name ?? provider.id, api: 'openai-completions', baseUrl: provider.baseUrl,
           // Keyless local endpoints still need a configured auth marker in Pi.
           ...(provider.apiKey?.trim() ? {} : { apiKey: 'revcode-keyless' }),
-          models: provider.models.map(model => ({ id: model.id, name: model.name ?? model.id, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 })) };
+          models: provider.models.map(model => ({ id: model.id, name: model.name ?? model.id, reasoning: false, input: model.supportsImages ? ['text', 'image'] : ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 })) };
         const temporary = `${modelsPath}.${randomUUID()}.tmp`;
         await writeFile(temporary, JSON.stringify(config, null, 2), { mode: 0o600 }); await rename(temporary, modelsPath);
       } finally { await release(); }

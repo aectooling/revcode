@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPiAgent } from '../../src/host/pi-agent.js';
 
-it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
-  const toolName = scenario === 'capture_zoom' ? 'revit_capture_view' : scenario;
+it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom', 'custom_capture'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
+  const toolName = ['capture_zoom', 'custom_capture'].includes(scenario) ? 'revit_capture_view' : scenario;
   const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-'));
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
@@ -23,12 +23,17 @@ it.each(['revit_execute_csharp', 'revit_capture_view', 'capture_zoom'])('real Pi
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
   try {
-    const agent = await createPiAgent(dir, dir, runtime => runtime.registerProvider('openai', {
+    let agent = await createPiAgent(dir, dir, runtime => runtime.registerProvider('openai', {
       api: 'openai-completions', baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'fixture-key',
       models: [{ id: 'revcode-fixture', name: 'Fixture', reasoning: false, input: ['text', 'image'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }],
     }));
+    if (scenario === 'custom_capture') {
+      await agent.addProvider!({ id: 'custom-vision', baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'fixture-key',
+        models: [{ id: 'revcode-fixture', supportsImages: true }] });
+      agent = await createPiAgent(dir); // Reload persisted capabilities through the real SDK.
+    }
     let output = ''; let calls = 0;
-    await agent.prompt('Count levels', { provider: 'openai', model: 'revcode-fixture', configured: true }, {
+    await agent.prompt('Count levels', { provider: scenario === 'custom_capture' ? 'custom-vision' : 'openai', model: 'revcode-fixture', configured: true }, {
       instanceId: 'fixture', revitVersion: '2026', revitBuild: '26.3', runtime: '.NET 8', document: { token: 'doc', title: 'Test', isFamily: false, isReadOnly: false, activeView: 'Level 1', selection: [] },
     }, [], async input => { calls++;
       if (toolName === 'revit_capture_view') {
@@ -65,6 +70,9 @@ it('persists custom providers and reuses shared SDK credentials across hosts wit
     expect(first.configured('custom-fixture')).toBe(false);
     await first.addProvider!({ id: 'custom-keyless', baseUrl: 'http://localhost:9998/v1', models: [{ id: 'local-model' }] });
     expect(first.configured('custom-keyless')).toBe(true);
+    const models = JSON.parse(await readFile(join(user, 'models.json'), 'utf8'));
+    expect(models.providers['custom-fixture'].models[0].input).toEqual(['text']);
+    expect(models.providers['custom-keyless'].models[0].input).toEqual(['text']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 30000);
 

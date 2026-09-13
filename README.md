@@ -102,7 +102,7 @@ For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` ca
 
 ## Visual inspection
 
-`revit_capture_view` returns a PNG directly to an image-capable agent model. It accepts optional `documentToken`, `viewId` (a view UniqueId), `pixelSize` (256-2048, default 1536), `zoomType` (`fitToPage` or `zoom`), `zoom` (integer percentage), and `region` (`view` or `visible`). Without a view ID it uses the target document's active view at execution time.
+`revit_capture_view` returns a PNG directly to an image-capable agent model. In custom-provider setup, select each vision model under **Models that accept images**; unselected models remain text-only. For an existing custom provider, set that model’s `input` to `["text", "image"]` in the shared `models.json` and refresh providers. It accepts optional `documentToken`, `viewId` (a view UniqueId), `pixelSize` (256-2048, default 1536), `zoomType` (`fitToPage` or `zoom`), `zoom` (integer percentage), and `region` (`view` or `visible`). Without a view ID it uses the target document's active view at execution time.
 
 Export sizing follows Autodesk's [ImageExportOptions](https://help.autodesk.com/cloudhelp/2026/ENU/Revit-API-MainReference/files/html/c2e823a1-6eb0-2bf3-f07b-ed46d8f7b70a.htm):
 

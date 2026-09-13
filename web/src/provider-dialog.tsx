@@ -84,6 +84,8 @@ export function ProviderDialog({
   const [customName, setCustomName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [modelIds, setModelIds] = useState("");
+  const [imageModelIds, setImageModelIds] = useState<string[]>([]);
+  const customModelIds = [...new Set(modelIds.split(/[\n,]/).map(value => value.trim()).filter(Boolean))];
   const [noAuth, setNoAuth] = useState(false);
   const completed = useRef(auth?.completedCount || 0);
   const submitted = useRef(!!auth?.busy);
@@ -197,14 +199,7 @@ export function ProviderDialog({
       setError("A provider with this name already exists.");
       return;
     }
-    const parsedModels = [
-      ...new Set(
-        modelIds
-          .split(/[\n,]/)
-          .map((value) => value.trim())
-          .filter(Boolean),
-      ),
-    ].map((id) => ({ id }));
+    const parsedModels = customModelIds.map(id => ({ id, supportsImages: imageModelIds.includes(id) }));
     if (!parsedModels.length) {
       setError("Enter at least one model ID.");
       return;
@@ -481,6 +476,16 @@ export function ProviderDialog({
               />
             </FieldLabel>
             <HelpText>Use the exact model IDs served by your endpoint.</HelpText>
+            {customModelIds.length > 0 && <fieldset className="grid gap-2">
+              <legend className="text-xs font-medium">Models that accept images</legend>
+              <HelpText>Enable only for vision models. This allows Revit view captures to be sent to the model.</HelpText>
+              {customModelIds.map(id => <label key={id} className="flex items-center gap-2 text-xs text-ink-soft">
+                <input type="checkbox" checked={imageModelIds.includes(id)} disabled={busy}
+                  onChange={event => setImageModelIds(current => event.target.checked ? [...current, id] : current.filter(value => value !== id))}
+                  className="size-3.5 accent-accent" />
+                {id}
+              </label>)}
+            </fieldset>}
             <label className="flex items-center gap-2 text-xs font-medium text-ink-soft">
               <input
                 type="checkbox"
