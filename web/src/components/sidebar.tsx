@@ -1,3 +1,5 @@
+import type { DesktopState } from '../../../src/host/desktop-types';
+import { DesktopActivity } from './desktop-activity';
 import mark from "../assets/revcode-mark.svg";
 import { cn } from "../lib/utils";
 import {
@@ -33,6 +35,8 @@ export type SidebarDocument = {
 };
 
 export type SidebarProps = {
+  desktop?: DesktopState;
+  vision: boolean;
   hostOnline: boolean;
   revitConnected: boolean;
   revitVersion?: string;
@@ -227,6 +231,26 @@ export function Sidebar(props: SidebarProps) {
   const panels: ReactNode = (
     <>
       <DocumentCard document={props.document} />
+      <section aria-label="Agent tools" className="px-2.5 py-2">
+        <h2 className="text-[10px] font-medium uppercase tracking-wider text-muted">Agent tools</h2>
+        <ul className="mt-3 space-y-3">
+          {[
+            { name: 'revit_execute_csharp', label: 'Execute Revit C#', description: 'Inspect and edit the model', vision: false, desktop: false },
+            { name: 'revit_capture_view', label: 'Capture a view', description: 'Inspect an exported Revit view', vision: true, desktop: false },
+            { name: 'revit_ui_observe', label: 'Observe desktop', description: 'See Revit and its dialogs', vision: true, desktop: true },
+            { name: 'revit_ui_action', label: 'Control desktop', description: 'Move, click, scroll and type', vision: true, desktop: true },
+          ].map(tool => {
+            const reason = !hostOnline ? 'Host offline' : !revitConnected ? 'Revit offline' : !providerConfigured ? 'Connect a provider' : tool.vision && !props.vision ? 'Needs a vision model' : tool.desktop && !props.desktop?.available ? 'Desktop unavailable' : tool.desktop && props.desktop?.status === 'unknown' ? 'Needs review' : 'Available';
+            return <li key={tool.name} title={tool.name} className="text-xs">
+              <div className="flex items-center gap-2"><span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${reason === 'Available' ? 'bg-accent' : 'bg-line-strong'}`} /><span className="font-medium">{tool.label}</span></div>
+              <p className="mt-1 text-[10px] text-muted">{tool.description}</p>
+              <p className="mt-0.5 break-all font-mono text-[9px] text-muted">{tool.name}</p>
+              <p className={`mt-0.5 text-[10px] ${reason === 'Available' ? 'text-accent' : 'text-muted'}`}>{reason}</p>
+            </li>;
+          })}
+        </ul>
+      </section>
+      {(props.desktop?.activity?.length || props.desktop?.error) ? <div className="border-t border-line px-2.5 py-3"><DesktopActivity state={props.desktop} compact /></div> : null}
       <ConsoleCard onOpenConsole={onOpenConsole} />
       <ProviderCard
         configured={props.providerConfigured}
@@ -361,7 +385,7 @@ export function Sidebar(props: SidebarProps) {
               <PanelLeftClose className="size-4" />
             </Button>
           </div>
-          <div className="grid max-h-[70%] shrink-0 gap-2 overflow-y-auto p-3">{panels}</div>
+          <div className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto p-3">{panels}</div>
           <ConnectionCard
             hostOnline={hostOnline}
             revitConnected={revitConnected}

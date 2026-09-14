@@ -8,6 +8,7 @@ export interface DesktopActionInput {
 export interface DesktopObservation {
   observationId: string; timestamp: string; windowRef: string; title: string;
   bounds: DesktopBounds; crop: DesktopBounds; width: number; height: number; dpi: number;
+  cursor?: { x: number; y: number }; // Coordinates in the returned screenshot.
   foregroundWindowRef?: string; windows: unknown[]; actionable: boolean; backend: string;
   owned?: boolean; recovery?: 'observe' | 'input'; reason?: string;
   mimeType: 'image/png'; data: string;
@@ -19,7 +20,11 @@ export interface DesktopOperation {
   operationId: string; requestId: string; fingerprint: string; input: DesktopActionInput;
   createdAt: string; documentToken: string | null; receipt: DesktopReceipt;
 }
+export interface DesktopActivity {
+  id: string; timestamp: string; label: string; status: 'running' | 'captured' | 'dispatched' | 'not-dispatched' | 'unknown' | 'failed'; error?: string;
+}
 export interface DesktopState {
+  activity?: DesktopActivity[];
   available: boolean; status: 'idle' | 'preparing' | 'recovering' | 'controlling' | 'paused' | 'unknown' | 'unavailable';
   countdownEndsAt?: number;
   error?: string; latest?: DesktopEvidence; operations: DesktopOperation[];

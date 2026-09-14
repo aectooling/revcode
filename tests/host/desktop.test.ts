@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -389,4 +389,31 @@ it('a late non-dispatch receipt cannot clear an independently reported native un
   expect(f.controller.snapshot().error).toBe('Native input release failed.');
   expect(f.controller.fenced).toBe(true);
   expect(result.observation?.actionable).toBe(false);
+});
+
+
+it('publishes capture progress, input receipts and errors without logging typed content', async () => {
+  const fixture = await setup();
+  const frame = await fixture.tools.observe({});
+  expect(fixture.controller.snapshot().activity?.at(-1)).toMatchObject({ status: 'captured', label: 'Screenshot · Revit' });
+  await fixture.tools.action('activity-type', { observationId: frame.observationId, action: 'type', text: 'private-value' });
+  const events = fixture.controller.snapshot().activity!;
+  expect(events.find(event => event.label === 'Type 13 characters')).toMatchObject({ status: 'dispatched' });
+  expect(JSON.stringify(events)).not.toContain('private-value');
+  fixture.failCapture();
+  await expect(fixture.tools.observe({})).rejects.toThrow('Capture unavailable');
+  expect(fixture.controller.snapshot().activity?.at(-1)).toMatchObject({ status: 'failed', error: 'Capture unavailable.' });
+  await fixture.controller.endTurn();
+  expect(fixture.controller.snapshot().activity).toHaveLength(4);
+});
+
+it('shows an observation in progress before the native screenshot returns', async () => {
+  const fixture = await setup();
+  fixture.block();
+  const capture = fixture.tools.observe({});
+  await vi.waitFor(() => expect(fixture.calls.some(call => call.kind === 'observe')).toBe(true));
+  expect(fixture.controller.snapshot().activity?.at(-1)?.status).toBe('running');
+  fixture.release();
+  await capture;
+  expect(fixture.controller.snapshot().activity?.at(-1)?.status).toBe('captured');
 });

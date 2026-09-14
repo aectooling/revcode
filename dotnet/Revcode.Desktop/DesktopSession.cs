@@ -6,9 +6,10 @@ using System.Security.Principal;
 namespace Revcode.Desktop;
 
 internal sealed record WindowInfo(string WindowRef, string Title, Bounds Bounds, uint Dpi);
+internal sealed record CursorPosition(double X, double Y);
 internal sealed record Observation(string ObservationId, string Timestamp, string WindowRef, string Title,
     Bounds Bounds, Bounds Crop, int Width, int Height, uint Dpi, string? ForegroundWindowRef,
-    WindowInfo[] Windows, bool Actionable, string Backend, string MimeType, string Data, bool Owned, string? Recovery, string? Reason);
+    WindowInfo[] Windows, bool Actionable, string Backend, string MimeType, string Data, bool Owned, string? Recovery, string? Reason, CursorPosition? Cursor = null);
 
 internal sealed class DesktopSession : IDisposable
 {
@@ -320,12 +321,14 @@ internal sealed class DesktopSession : IDisposable
             : "Cursor, window, or dialog changed during capture. Observe again.";
         var result = new Observation(Guid.NewGuid().ToString("N"), timestamp.ToString("O"), selected.WindowRef, selected.Title,
             bounds, physical, width, height, selected.Dpi, windows.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground)?.WindowRef,
-            windows, actionable, "experimental-visible-gdi", "image/png", Convert.ToBase64String(stream.ToArray()), LeaseReady, !actionable && LeaseReady ? inputWaiting ? "input" : "observe" : null, reason);
+            windows, actionable, "experimental-visible-gdi", "image/png", Convert.ToBase64String(stream.ToArray()), LeaseReady, !actionable && LeaseReady ? inputWaiting ? "input" : "observe" : null, reason,
+            cursorAvailable ? new CursorPosition((captureCursor.X - physical.X) * (double)width / physical.Width, (captureCursor.Y - physical.Y) * (double)height / physical.Height) : null);
         if (actionable)
         {
             observation = result; observationWindow = window; windowsSignature = Signature(windows);
             cursor = captureCursor;
         }
+        notice.RecordObservation();
         return result;
     }
 
@@ -399,6 +402,7 @@ internal sealed class DesktopSession : IDisposable
         if (receipt.Status == "dispatched") inactivity.Restart();
         else if (receipt.Recovery is not ("observe" or "input") || !LeaseReady) Stop();
         receipt = receipt with { Owned = LeaseReady, Recovery = LeaseReady ? receipt.Recovery : null };
+        notice.RecordAction(request, receipt, frame);
         ledger.Complete(request, receipt);
         return receipt;
     }

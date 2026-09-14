@@ -20,10 +20,11 @@ const desktop = {
   request: async kind => {
     if (kind === 'start') { desktopStarts++; desktopActive = true; return { status: 'owned' }; }
     if (kind === 'recover') { desktopRecovers++; desktopNeedsRecovery = false; return { recovered: true }; }
+    if (kind === 'action') return { status: 'dispatched', inserted: 3 };
     if (kind !== 'observe') throw new Error('Browser must not dispatch desktop input.');
     return { observationId: 'a'.repeat(32), windowRef: 'b'.repeat(32), title: 'Desktop smoke fixture', timestamp: new Date().toISOString(),
       bounds: { x: 0, y: 0, width: 1, height: 1 }, crop: { x: 0, y: 0, width: 1, height: 1 }, width: 1, height: 1, dpi: 96,
-      windows: [], actionable: desktopActive && !desktopNeedsRecovery, owned: desktopActive,
+      cursor: { x: 0.5, y: 0.5 }, windows: [], actionable: desktopActive && !desktopNeedsRecovery, owned: desktopActive,
       recovery: desktopNeedsRecovery ? 'input' : undefined, backend: 'fixture', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
   }, stop: async () => { desktopStops++; desktopActive = false; }, close: async () => {},
 };
@@ -102,7 +103,8 @@ const agent = {
   },
   prompt: async (_text, _settings, _context, _history, execute, update, desktopTools) => {
     if (_text === 'Desktop recovery test') {
-      await desktopTools.observe({});
+      const frame = await desktopTools.observe({});
+      await desktopTools.action('browser-click-' + desktopStarts, { observationId: frame.observationId, action: 'click', x: 0.5, y: 0.5 });
       update('Desktop recovered and ready.');
       await new Promise(resolve => { finishDesktop = resolve; });
       return;
@@ -209,14 +211,10 @@ try {
   await expect(
     page.getByText("Revit connected", { exact: true }),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Screenshot', exact: true }).click();
-  await page.getByText(/Latest screenshot: Desktop smoke fixture/).click();
-  const desktopImage = page.getByRole('img', { name: 'Revit desktop: Desktop smoke fixture' });
-  await expect(desktopImage).toBeVisible();
-  await expect.poll(() => desktopImage.evaluate(image => image.naturalWidth)).toBe(1);
-  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
-  await expect.poll(() => desktopStops).toBeGreaterThan(0);
-  await page.getByText(/Latest screenshot: Desktop smoke fixture/).click();
+  await expect(page.getByRole('button', { name: 'Screenshot', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/^Desktop:/)).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Agent tools' }).getByRole('listitem')).toHaveCount(4);
+  await expect(page.getByText('revit_ui_action', { exact: true })).toBeVisible();
   await expect(page).toHaveURL(`${host.url}/`);
   await page.getByRole("link", { name: "Skip to message" }).focus();
   await page.keyboard.press("Enter");
@@ -372,24 +370,43 @@ try {
 
   await page.getByLabel('Message the assistant').fill('Desktop recovery test');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.getByText(/Desktop control starts in/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Screenshot', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
+  await expect(page.getByText(/Starting in/)).toBeVisible();
+  const lockScreen = page.getByRole('dialog', { name: 'Getting ready to work' });
+  await expect(lockScreen).toBeVisible();
+  expect(await lockScreen.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 1050 });
+  await page.keyboard.press('Escape');
+  await expect(lockScreen).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Stop and take control' })).toBeFocused();
+  await page.getByRole('button', { name: 'Stop and take control', exact: true }).click();
   await expect.poll(() => host.snapshot().busy).toBe(false);
   expect(desktopStarts).toBe(0);
 
   desktopNeedsRecovery = true;
   await page.getByLabel('Message the assistant').fill('Desktop recovery test');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.getByText(/Desktop control starts in/)).toBeVisible();
-  await expect(page.getByText(/Input detected — retrying in/)).toBeVisible();
+  await expect(page.getByText(/Starting in/)).toBeVisible();
+  await expect(page.getByText(/Resuming in/)).toBeVisible();
   await page.screenshot({ path: resolve('.local/desktop-recovery-countdown.png') });
-  await expect(page.getByText('Agent is using your mouse and keyboard', { exact: true })).toBeVisible();
-  await expect(page.getByText('Desktop recovered and ready.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Computer use in progress', { exact: true })).toBeVisible();
+  await expect.poll(() => host.snapshot().messages.some(message => message.text.includes('Desktop recovered and ready.'))).toBe(true);
+  const controlDialog = page.getByRole('dialog', { name: 'Revcode is working in Revit' });
+  await expect(controlDialog.getByRole('img', { name: 'Revit desktop: Desktop smoke fixture' })).toBeVisible();
+  await expect(controlDialog.getByRole('img', { name: 'Cursor at capture: 1, 1' })).toBeVisible();
+  await expect(controlDialog.getByText('Input sent', { exact: true })).toBeVisible();
+  await expect(controlDialog.getByText('Captured', { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: resolve('.local/desktop-frosted-activity.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await controlDialog.boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+  expect(await controlDialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: resolve('.local/desktop-frosted-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1050 });
   expect(desktopStarts).toBe(1); expect(desktopRecovers).toBe(1);
-  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop and take control', exact: true }).click();
   await expect.poll(() => host.snapshot().busy).toBe(false);
-  await expect(page.getByText('Agent is using your mouse and keyboard', { exact: true })).toBeHidden();
+  await expect(page.getByText('Computer use in progress', { exact: true })).toBeHidden();
+  await expect(page.getByRole('complementary').getByText('Input sent', { exact: true })).toBeVisible();
+  await expect.poll(() => desktopStops).toBeGreaterThan(0);
 
   await mkdir(resolve(".local"), { recursive: true });
   await page.screenshot({
@@ -433,7 +450,7 @@ try {
   ).toBeDisabled();
   expect(errors).toEqual([]);
   console.log(
-    "PASS browser smoke: desktop screenshot rendering/Stop, production UI, token bootstrap/reload, query, rollback, cancellation, provider error/key privacy, Pi chat, mobile layout, disconnect/reconnect without replay, unauthorized token.",
+    "PASS browser smoke: full-screen computer-use modal/Stop, production UI, token bootstrap/reload, query, rollback, cancellation, provider error/key privacy, Pi chat, mobile layout, disconnect/reconnect without replay, unauthorized token.",
   );
 } finally {
   clearInterval(heartbeat);

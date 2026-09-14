@@ -1,3 +1,4 @@
+import type { DesktopActivity } from './desktop-types.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, readdir, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -10,6 +11,7 @@ const defaultTiming: DesktopTiming = { countdownMs: 3000, recoveryDelayMs: 3000,
 export class DesktopController {
   private operations: DesktopOperation[] = [];
   private nativeUnknown = false;
+  private activity: DesktopActivity[] = [];
   private latest?: DesktopEvidence;
   private frame?: DesktopObservation;
   private status: DesktopState['status'];
@@ -80,7 +82,14 @@ export class DesktopController {
   get inFlight() { return this.pending; }
   private get controlActive() { return this.status === 'controlling' || this.status === 'recovering'; }
   get fenced() { return this.status === 'unknown'; }
-  snapshot(): DesktopState { return { available: !!this.transport && this.status !== 'unavailable', status: this.status, countdownEndsAt: this.countdownEndsAt, error: this.error, latest: this.latest, operations: this.operations.slice(-30) }; }
+  snapshot(): DesktopState { return { activity: this.activity.map(item => ({ ...item })), available: !!this.transport && this.status !== 'unavailable', status: this.status, countdownEndsAt: this.countdownEndsAt, error: this.error, latest: this.latest, operations: this.operations.slice(-30) }; }
+
+  private log(label: string) {
+    const event: DesktopActivity = { id: randomUUID(), timestamp: new Date().toISOString(), label, status: 'running' };
+    this.activity = [...this.activity.slice(-99), event];
+    this.changed();
+    return event;
+  }
 
   private async delay(ms: number, epoch: number, signal?: AbortSignal) {
     signal?.throwIfAborted();
@@ -182,6 +191,9 @@ export class DesktopController {
           op.receipt = { status: 'not-dispatched', inserted: 0, error: (error as Error).message };
           await this.persist(); throw error;
         }
+        const activity = this.log(action.action === 'type' ? `Type ${action.text!.length} characters`
+          : action.action === 'key' ? `Press ${action.keys!.join(' + ')}`
+          : `${action.action === 'move' ? 'Move pointer' : action.action === 'click' ? 'Click' : `Scroll ${action.direction}`} at ${Math.round(action.x!)}, ${Math.round(action.y!)}`);
         this.receivingAction = true;
         this.lostLeaseDuringAction = false;
         try {
@@ -192,6 +204,7 @@ export class DesktopController {
         } catch (error) {
           op.receipt = { status: error instanceof DesktopRequestError ? 'not-dispatched' : 'unknown', inserted: 0, error: (error as Error).message };
         }
+        activity.status = op.receipt.status; activity.error = op.receipt.error; this.changed();
         if (op.receipt.status === 'unknown') { this.status = 'unknown'; this.error = op.receipt.error; }
         if (op.receipt.status === 'not-dispatched' && !this.fenced) {
           if (this.lostLeaseDuringAction || op.receipt.owned === false) this.status = 'paused';
@@ -225,6 +238,18 @@ export class DesktopController {
   }
 
   private async capture(input: DesktopObserveInput, passive = false, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
+    const activity = this.log('Observe Revit desktop');
+    try {
+      const frame = await this.captureFrame(input, passive, signal, check);
+      activity.status = 'captured'; activity.label = `Screenshot · ${frame.title}`;
+      return frame;
+    } catch (error) {
+      activity.status = 'failed'; activity.error = (error as Error).message;
+      throw error;
+    } finally { this.changed(); }
+  }
+
+  private async captureFrame(input: DesktopObserveInput, passive = false, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
     const request = validateObserve(input);
     const epoch = this.epoch;
     let frame!: DesktopObservation;

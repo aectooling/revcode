@@ -69,7 +69,7 @@ let token = readToken();
 
 async function loadDesktopImage(artifact: string, signal: AbortSignal) {
   const response = await fetch(`/api/desktop/image/${encodeURIComponent(artifact)}`, { headers: { Authorization: `Bearer ${token}` }, signal });
-  if (!response.ok) throw new Error('Screenshot expired. Capture again.');
+  if (!response.ok) throw new Error('Screenshot unavailable.');
   return response.blob();
 }
 
@@ -336,6 +336,8 @@ function App() {
           Skip to message
         </a>
         <Sidebar
+          desktop={state?.desktop}
+          vision={!!state?.providers.find(provider => provider.id === state.settings.provider)?.models.find(model => model.id === state.settings.model)?.supportsImages}
           hostOnline={hostOnline}
           revitConnected={!!state?.connected}
           revitVersion={state?.context?.revitVersion}
@@ -383,10 +385,7 @@ function App() {
               </span>
             </div>
           )}
-          <DesktopPanel state={state?.desktop} online={hostOnline}
-            vision={!!state?.providers.find(provider => provider.id === state.settings.provider)?.models.find(model => model.id === state.settings.model)?.supportsImages}
-            capture={async () => { await api('/api/desktop/observe', {}); }}
-            stop={async () => { await api('/api/desktop/stop', {}); }} loadImage={loadDesktopImage} />
+          <DesktopPanel loadImage={loadDesktopImage} state={state?.desktop} online={hostOnline} stop={async () => { await api('/api/desktop/stop', {}); }} />
           <Conversation
             messages={state?.messages ?? []}
             busy={busy}
