@@ -1,3 +1,4 @@
+import { HighlightedCode, isCsharp } from "./highlighted-code";
 import type { Element, Root } from "hast";
 import { memo, useId, type MouseEvent } from "react";
 import Markdown, { type Components } from "react-markdown";
@@ -40,6 +41,17 @@ function navigateFragment(event: MouseEvent<HTMLAnchorElement>) {
 }
 
 const components: Components = {
+  pre: ({ node, children }) => {
+    const code = node?.children.find(child => child.type === "element" && child.tagName === "code");
+    if (code?.type === "element") {
+      const language = String(code.properties.className ?? "").replace("language-", "");
+      if (isCsharp(language)) {
+        const source = code.children.map(child => child.type === "text" ? child.value : "").join("");
+        return <HighlightedCode code={source.replace(/\n$/, "")} />;
+      }
+    }
+    return <pre>{children}</pre>;
+  },
   a: ({ node: _node, href, ...props }) => (
     <a
       {...props}

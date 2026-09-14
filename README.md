@@ -48,6 +48,8 @@ The package includes the Node executable, production npm dependencies (including
 
 Provider requests use your account and its normal billing. The direct C# console and the agent use the same native execution path.
 
+Open **Skills & Markdown** from the sidebar or composer to browse instructions, choose a custom folder, enable skills, and select them for the next message. The run inspector groups tools by accepted message, supports search and filters, and links back to the conversation. Select one or several runs to create a reusable skill, or update an existing skill; saved diffs and revision restoration are available in its preview. **Skill authoring** mode works with a configured provider even when Revit is disconnected, and has no native execution or desktop tools. See [skills and revision recovery](docs/skills.md), [history/storage contracts](docs/FEATURE-CONTRACTS.md), and [C# highlighting and console draft recovery](docs/CSHARP-HIGHLIGHTING.md).
+
 ## Connect a provider
 
 Provider setup follows Hoppercode's flow: review connected providers, search the Pi catalog, choose a sign-in method, then select a model. Browser sign-in is offered when supported by that provider, including subscription-backed providers exposed by Pi. Follow the browser/device-code instructions; if a provider requests a code or another field, enter it in the setup dialog. API-key entry remains available for providers that support it. Sign-in can be cancelled, and connections can be refreshed or disconnected.

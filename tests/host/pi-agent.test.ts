@@ -127,3 +127,33 @@ it('uses real SDK OAuth login interaction and credential persistence with a simu
     await agent.logout!('fixture-oauth'); expect(agent.configured('fixture-oauth')).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 30000);
+
+it.each(['success', 'invalid', 'result-error'])('records real SDK skill tool lifecycle and excludes native tools in authoring (%s)', async scenario => {
+  const invalid = scenario === 'invalid';
+  const returnedError = scenario === 'result-error';
+  const { HostSkillLibrary } = await import('../../src/host/skills.js');
+  const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-skills-'));
+  const requests: any[] = []; const events: any[] = []; let correlated = false;
+  const library = new HostSkillLibrary(dir, join(dir, 'preferences.json'), join(dir, 'skills'));
+  await library.initialize();
+  const saved = await library.save({ root: join(dir, 'skills'), expectedPreferencesRevision: 0, files: { 'verified/SKILL.md': '# Verified procedure\nInspect before edits.' } });
+  const snapshot = await library.createRunSnapshot([saved.id]);
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const chunk = (delta: object, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: 'skills-fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    if (requests.length === 1) { chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_skill', type: 'function', function: { name: returnedError ? 'history_fixture' : 'read', arguments: JSON.stringify(invalid ? { path: 123 } : { path: saved.id }) } }] }); chunk({}, 'tool_calls'); }
+    else { chunk({ role: 'assistant', content: 'Reviewed skill.' }); chunk({}, 'stop'); }
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const agent = await createPiAgent(dir, dir, runtime => runtime.registerProvider('openai', { api: 'openai-completions', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: 'fixture-key', models: [{ id: 'fixture', name: 'Fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }] }));
+    await agent.prompt('Review this reusable skill.', { provider: 'openai', model: 'fixture', configured: true }, { instanceId: 'fixture', revitVersion: '2026', revitBuild: '26.3', runtime: '.NET 8', document: null }, [], async () => { throw new Error('Native execution unavailable'); }, () => {}, undefined, { mode: 'authoring', skills: snapshot, library, historyTools: returnedError ? [{ name: 'history_fixture', label: 'Fail fixture', description: 'Return structured error', parameters: {}, execute: async () => ({ content: [{ type: 'text', text: 'Fixture tool failure' }], details: {}, isError: true }) } as any] : [], onToolEvent: async event => { await new Promise(resolve => setTimeout(resolve, 5)); events.push(event); }, withToolCall: async (id, work) => { expect(events[0]).toMatchObject({ type: 'start', id }); correlated = true; return work(); } });
+    expect(requests[0].tools.map((t: any) => t.function.name)).toEqual(['read', 'skills_search', 'skill_edit_read', 'skill_save', ...(returnedError ? ['history_fixture'] : [])]);
+    expect(JSON.stringify(requests[0].messages)).toContain('Inspect before edits.');
+    expect(events).toHaveLength(2); expect(events[0]).toMatchObject({ type: 'start', name: returnedError ? 'history_fixture' : 'read' }); expect(events[1]).toMatchObject({ type: 'end', name: returnedError ? 'history_fixture' : 'read', isError: invalid || returnedError });
+    if (!invalid) expect(correlated).toBe(true);
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }); }
+}, 30000);
