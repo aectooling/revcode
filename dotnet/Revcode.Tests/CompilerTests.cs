@@ -118,7 +118,10 @@ public sealed class CompilerTests : IDisposable
     private static WeakReference LoadAndRelease(byte[] bytes, string contractPath)
     {
         var context = new AssemblyLoadContext(null, isCollectible: true);
-        context.LoadFromAssemblyPath(contractPath);
+        // This fixture tests collectible assemblies, not Windows file mappings.
+        // Loading bytes avoids a deferred DLL unmap racing directory cleanup.
+        using var contract = new MemoryStream(File.ReadAllBytes(contractPath));
+        context.LoadFromStream(contract);
         using var stream = new MemoryStream(bytes);
         var assembly = context.LoadFromStream(stream);
         var instance = Activator.CreateInstance(assembly.GetType("RevcodeSnippet")!);
