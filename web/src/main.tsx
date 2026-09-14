@@ -27,7 +27,9 @@ import {
 import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
 import mark from "./assets/revcode-mark.svg";
-import { TriangleAlert } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
+import { DesktopPanel } from './components/desktop-panel';
+import type { DesktopState } from '../../src/host/desktop-types';
 
 type HostState = {
   instanceId: string;
@@ -39,6 +41,7 @@ type HostState = {
   settings: Settings;
   providers: ProviderSummary[];
   auth?: AuthState;
+  desktop?: DesktopState;
 };
 
 function readToken() {
@@ -63,6 +66,12 @@ function readToken() {
   }
 }
 let token = readToken();
+
+async function loadDesktopImage(artifact: string, signal: AbortSignal) {
+  const response = await fetch(`/api/desktop/image/${encodeURIComponent(artifact)}`, { headers: { Authorization: `Bearer ${token}` }, signal });
+  if (!response.ok) throw new Error('Screenshot unavailable.');
+  return response.blob();
+}
 
 async function api<T>(
   path: string,
@@ -122,7 +131,8 @@ function StatusPill({
       </Badge>
     );
   return (
-    <Badge variant="accent" dot pulse={busy} className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+    <Badge variant="accent" dot={!busy} className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+      {busy && <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />}
       <span className="text-ink">{busy ? "Working" : "Ready"}</span>
     </Badge>
   );
@@ -327,6 +337,8 @@ function App() {
           Skip to message
         </a>
         <Sidebar
+          desktop={state?.desktop}
+          vision={!!state?.providers.find(provider => provider.id === state.settings.provider)?.models.find(model => model.id === state.settings.model)?.supportsImages}
           hostOnline={hostOnline}
           revitConnected={!!state?.connected}
           revitVersion={state?.context?.revitVersion}
@@ -374,6 +386,7 @@ function App() {
               </span>
             </div>
           )}
+          <DesktopPanel loadImage={loadDesktopImage} state={state?.desktop} online={hostOnline} stop={async () => { await api('/api/desktop/stop', {}); }} />
           <Conversation
             messages={state?.messages ?? []}
             busy={busy}

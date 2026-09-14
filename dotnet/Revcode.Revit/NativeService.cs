@@ -41,7 +41,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         root = FindRoot();
         runtime = JsonSerializer.Deserialize<RuntimeConfig>(File.ReadAllText(Path.Combine(root, "runtime.json")), Json)
             ?? throw new InvalidOperationException("Invalid runtime.json.");
-        foreach (var path in new[] { runtime.NodePath, runtime.HostPath, runtime.CompilerPath })
+        foreach (var path in new[] { runtime.NodePath, runtime.HostPath, runtime.CompilerPath, runtime.DesktopPath })
             if (!File.Exists(ResolvePath(path))) throw new FileNotFoundException("Revcode runtime file missing. Reinstall the package.", path);
         // Capture only assembly paths here; the worker never invokes Revit.
         references = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -101,7 +101,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         var openDocuments = app.Application.Documents.Cast<Document>().Where(x => x.IsValidObject && !x.IsLinked)
             .Select(x => doc?.Token == documents.GetToken(x) ? doc! : new DocumentSnapshot(documents.GetToken(x), x.Title,
                 x.IsFamilyDocument, x.IsReadOnly, "", [])).ToArray();
-        return new(instanceId, app.Application.VersionNumber, app.Application.VersionBuild, RuntimeInformation.FrameworkDescription, doc, openDocuments);
+        return new(instanceId, app.Application.VersionNumber, app.Application.VersionBuild, RuntimeInformation.FrameworkDescription, doc, openDocuments, DateTimeOffset.UtcNow.ToString("O"));
     }
 
     private async Task StartAsync()
@@ -122,7 +122,10 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var arg in new[] { ResolvePath(runtime.HostPath), "--instance", instanceId, "--parent-pid", Environment.ProcessId.ToString(), "--discovery", discoveryPath, "--data-dir", dataDir, "--user-dir", userDir }) start.ArgumentList.Add(arg);
+        using var parent = Process.GetCurrentProcess();
+        foreach (var arg in new[] { ResolvePath(runtime.HostPath), "--instance", instanceId, "--parent-pid", Environment.ProcessId.ToString(),
+            "--parent-start-ticks", parent.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--desktop-path", ResolvePath(runtime.DesktopPath), "--discovery", discoveryPath, "--data-dir", dataDir, "--user-dir", userDir }) start.ArgumentList.Add(arg);
         start.Environment["REVCODE_NATIVE_TOKEN"] = nativeToken;
         using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not launch bundled Node.");
         try

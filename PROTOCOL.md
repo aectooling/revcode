@@ -1,5 +1,13 @@
 # MVP integration contract
 
+## Desktop extension
+
+Pi now exposes `revit_ui_observe` and `revit_ui_action` alongside C# execution and API view capture. The separate helper protocol, action journal, image limits and recovery rules are specified in [docs/DESKTOP-PROTOCOL.md](docs/DESKTOP-PROTOCOL.md).
+
+`runtime.json` additionally requires `desktopPath: "desktop/Revcode.Desktop.exe"`. The native launcher supplies `--desktop-path <absolute-helper-path>` and `--parent-start-ticks <Revit-UTC-start-ticks>` to Node. The helper is launched lazily with both Revit and Node PID/start identities. Native context payloads add optional `capturedAt` (UTC ISO timestamp from the actual Idling snapshot acquisition); repeated transport heartbeats do not advance it. Desktop image metadata exposes that cached context and its age, not a guarantee of live document identity.
+
+Authenticated browser state adds `desktop` (availability, control status, latest image metadata, recent action receipts), and provider models add `supportsImages`. `POST /api/desktop/observe` captures passively, including during native busy/unknown states. `GET /api/desktop/image/<artifact>` serves only the latest PNG with bearer authentication. `POST /api/desktop/stop` and `/api/cancel` bypass the mutation queue and invalidate pending acceptance through a cancellation epoch; canceled, undispatched requests cannot later start. Desktop unknown outcomes also fence API mutations. New Pi sessions are in-memory; host text history supplies continuity, and images must be recaptured across turns.
+
 ## Atomic batch extension
 
 Browser `POST /api/execute` and `revit_execute_csharp` accept a discriminated request:

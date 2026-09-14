@@ -1,19 +1,43 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Dealer } from 'zeromq';
 import { createHost } from '../../src/host/server.js';
 import type { Agent } from '../../src/host/types.js';
+import type { DesktopTransport } from '../../src/host/desktop-types.js';
+
+const persistence = vi.hoisted(() => ({ gate: undefined as undefined | (() => Promise<void>) }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+    if (String(args[0]).endsWith('journal.json.tmp')) await persistence.gate?.();
+    return actual.writeFile(...args);
+  } };
+});
 
 const resources: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of resources.splice(0).reverse()) await cleanup(); });
 const context = { instanceId: 'test-instance', revitVersion: '2026', revitBuild: '26.3', runtime: '.NET 8', document: { token: 'doc-1', title: 'Test', isFamily: false, isReadOnly: false, activeView: 'Level 1', selection: [] } };
-async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000) {
+function desktopFixture() {
+  let captures = 0, stops = 0;
+  const transport: DesktopTransport = {
+    request: async kind => {
+      if (kind === 'observe') return { observationId: (++captures).toString(16).padStart(32, '0'), windowRef: 'a'.repeat(32), title: 'Revit',
+        timestamp: new Date().toISOString(), width: 1, height: 1, dpi: 96, bounds: { x: 0, y: 0, width: 1, height: 1 }, crop: { x: 0, y: 0, width: 1, height: 1 },
+        windows: [], actionable: true, backend: 'fixture', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
+      if (kind === 'action') return { status: 'unknown', inserted: 1, error: 'Partial input' };
+      return { status: 'owned' };
+    }, stop: async () => { stops++; }, close: async () => {},
+  };
+  return { transport, stops: () => stops };
+}
+async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000, desktop?: DesktopTransport) {
   const dir = await mkdtemp(join(tmpdir(), 'revcode-host-'));
   resources.push(() => rm(dir, { recursive: true, force: true }));
   const agent: Agent = { providers: [{ id: 'anthropic', models: [{ id: 'test-model', name: 'Test' }] }], configured: () => true, setKey: async () => {}, abort: async () => {}, prompt: async () => {}, ...overrides };
-  const host = await createHost({ instanceId: 'test-instance', nativeToken: 'native-secret', dataDir: dir, webDir: dir, agent, heartbeatMs });
+  const host = await createHost({ instanceId: 'test-instance', nativeToken: 'native-secret', dataDir: dir, webDir: dir, agent, heartbeatMs, desktop,
+    desktopTiming: { countdownMs: 0, recoveryDelayMs: 0, inputPollMs: 0, inputAttempts: 3 } });
   resources.push(() => host.close());
   const dealer = new Dealer({ receiveTimeout: 2000, linger: 0 }); dealer.connect(host.nativeEndpoint);
   resources.push(async () => dealer.close());
@@ -25,6 +49,94 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000) {
 }
 
 describe('authenticated Revit host', () => {
+  it.each(['reject', 'resolve'])('reports the desktop interruption when the SDK %ss after abort', async completion => {
+    const fixture = desktopFixture();
+    let finishPrompt: (() => void) | undefined;
+    const { host, api } = await setup({
+      prompt: async (_text, _settings, _context, _history, _execute, _update, desktop) => {
+        await desktop!.observe({});
+        await new Promise<void>((resolve, reject) => { finishPrompt = () => completion === 'resolve' ? resolve() : reject(new Error('Request was aborted')); });
+      },
+      abort: async () => { finishPrompt?.(); },
+    }, 10000, fixture.transport);
+    expect((await api('chat', { requestId: 'desktop-interruption', text: 'Inspect Revit' })).status).toBe(202);
+    await expect.poll(() => !!finishPrompt).toBe(true);
+    fixture.transport.onState?.({ owned: false, unknown: false, error: 'Desktop control paused: focus moved outside Revit.' });
+    await expect.poll(() => host.snapshot().messages.at(-1)?.text).toContain('focus moved outside Revit');
+    expect(host.snapshot().messages.at(-1)?.text).not.toContain('Request was aborted');
+  });
+
+  it.each(['chat', 'execute'])('Stop cancels %s while its acceptance journal write is suspended', async path => {
+    let prompts = 0;
+    const { api, host, dealer } = await setup({ prompt: async () => { prompts++; } });
+    let entered = false;
+    let release!: () => void;
+    persistence.gate = async () => {
+      persistence.gate = undefined;
+      entered = true;
+      await new Promise<void>(resolve => { release = resolve; });
+    };
+    const submission = api(path, path === 'chat' ? { requestId: 'stop-acceptance-chat', text: 'Do not run after Stop.' } : { requestId: 'stop-acceptance-api', mode: 'query', code: 'return 1;' });
+    try {
+      await expect.poll(() => entered).toBe(true);
+      expect((await api('cancel', {})).status).toBe(200);
+    } finally { persistence.gate = undefined; release?.(); }
+    expect((await submission).status).toBe(202);
+    await expect.poll(() => host.snapshot().busy).toBe(false);
+    expect(prompts).toBe(0);
+    if (path === 'execute') {
+      expect(host.snapshot().operations[0].status).toBe('cancelled');
+      const [frame] = await dealer.receive();
+      expect(JSON.parse(frame.toString()).command.kind).toBe('cancel');
+    } else expect(host.snapshot().messages.at(-1)?.text).toContain('Cancelled');
+  });
+
+  it('exposes authenticated passive desktop capture despite an unknown native outcome', async () => {
+    const fixture = desktopFixture();
+    const { api, dealer, native, host } = await setup({}, 10000, fixture.transport);
+    const result = await (await api('execute', { requestId: 'native-unknown-001', mode: 'api', code: 'return true;' })).json();
+    await dealer.receive();
+    await native('operation', { operationId: result.operationId, status: 'unknown' });
+    await expect.poll(() => host.snapshot().operations[0].status).toBe('unknown');
+    expect((await api('desktop/observe', {}, 'wrong-token')).status).toBe(401);
+    const screenshot = await api('desktop/observe', {});
+    expect(screenshot.status).toBe(200); expect((await screenshot.json()).actionable).toBe(false);
+    const artifact = host.snapshot().desktop.latest!.artifact;
+    expect((await api(`desktop/image/${artifact}`, undefined, 'wrong-token')).status).toBe(401);
+    const image = await api(`desktop/image/${artifact}`); expect(image.headers.get('content-type')).toBe('image/png');
+    expect(host.snapshot().operations[0].status).toBe('unknown');
+  });
+
+  it('passes desktop tools to chat and fences native edits after uncertain desktop input', async () => {
+    const fixture = desktopFixture();
+    const { api, host } = await setup({ prompt: async (_text, _settings, _context, _history, _execute, _update, desktop) => {
+      const image = await desktop!.observe({});
+      await desktop!.action('call-1', { observationId: image.observationId, action: 'click', x: 0, y: 0 });
+    } }, 10000, fixture.transport);
+    expect((await api('chat', { requestId: 'desktop-chat-001', text: 'Click the test control.' })).status).toBe(202);
+    await expect.poll(() => host.snapshot().desktop.status).toBe('unknown');
+    expect((await api('execute', { requestId: 'blocked-by-desktop', mode: 'query', code: 'return 1;' })).status).toBe(409);
+    expect((await api('desktop/observe', {})).status).toBe(200);
+    expect(host.snapshot().desktop.status).toBe('unknown');
+  });
+
+  it('handles Stop outside the mutation queue during a pending desktop capture', async () => {
+    const fixture = desktopFixture();
+    const request = fixture.transport.request;
+    let release!: () => void;
+    let started = false;
+    fixture.transport.request = async (kind, input, id) => {
+      if (kind === 'observe') { started = true; await new Promise<void>(resolve => { release = resolve; }); }
+      return request(kind, input, id);
+    };
+    const { api } = await setup({}, 10000, fixture.transport);
+    const capture = api('desktop/observe', {});
+    await expect.poll(() => started).toBe(true);
+    expect((await api('desktop/stop', {})).status).toBe(200);
+    expect(fixture.stops()).toBeGreaterThan(0);
+    release(); expect((await capture).status).toBe(200);
+  });
+
   it('journals and deduplicates the entire batch and fences an unknown group', async () => {
     const { api, dealer, native, dir, host } = await setup();
     const input = { requestId: 'batch-request-001', mode: 'batch', documentToken: 'doc-1', steps: [{ name: 'First', code: 'return 1;' }, { name: 'Second', code: 'return 2;' }], verify: { code: 'return true;' } };

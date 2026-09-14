@@ -2,6 +2,8 @@
 
 Status: architecture baseline researched 2026-09-12. An end-to-end prototype is now implemented; see README.md and docs/TESTING.md for its actual scope and validation. The prototype keeps the required ZeroMQ native bridge, uses one Node host per Revit process, and puts Roslyn compilation in a separate worker. The shared multi-process scheduler and several later-stage features below remain future work.
 
+Revision 2026-09-13, reviewed: the next extension is visual desktop interaction, specified in [docs/DESKTOP-UI-PLAN.md](docs/DESKTOP-UI-PLAN.md). Use screenshots and real mouse/keyboard input through a separate self-contained C# Windows helper using P/Invoke to `user32.dll` / `SendInput`. Evaluate Windows.Graphics.Capture against real Revit rendering before committing to the capture backend. FlaUI/UI Automation is not a dependency or acceptance gate. Add exclusive desktop input ownership, Stop, and dispatch recovery before model-driven actions; prove image delivery and one complete API-limited workflow before expanding scope. This extension supersedes the original screenshot exclusion and one-tool-only inventory for the next phase; the current production implementation has the C# tool and API-based revit_capture_view. The desktop helper is now bundled and wired to revit_ui_observe and revit_ui_action for experimental testing at user request. Live Revit acceptance and WGC comparison remain pending. Earlier sections describe the original baseline, not a requirement to reimplement completed work.
+
 Build a Windows Revit add-in that opens a browser chat with one ribbon click. A local Node host embeds Pi. The agent primarily interacts with Revit through one C# execution tool. Support Revit 2025 onward, with .NET 8 as the minimum and explicit support for newer host runtimes.
 
 **1. Reference architecture and reuse**
@@ -110,7 +112,7 @@ return new FilteredElementCollector(ctx.Doc)
 
 Return a structured envelope with `operationId`, phase, outcome, plain JSON result, bounded logs, source diagnostics, warnings/failures, model-change summary, transaction status, and compilation/execution timings. Distinguish compile failure, stale target, queued cancellation, rolled-back execution, committed execution, and outcome unknown. Return created/modified/deleted identities where observable; capture committed change summaries through Revit document events with operation attribution.
 
-Inject a small context snapshot before each prompt: selected process/document, runtime/API version, active view, project/family kind, units, and bounded selection IDs. Let C# queries discover everything else. Return materialized arrays rather than lazy enumerables, page large queries, and use stable element UniqueIds across turns. Include tested examples for querying, parameter changes, element creation, units, and family/project differences. The initial workflow is inspect, modify, then query to verify. Visual capture can be added later if actual tasks demonstrate a need.
+Inject a small context snapshot before each prompt: selected process/document, runtime/API version, active view, project/family kind, units, and bounded selection IDs. Let C# queries discover everything else. Return materialized arrays rather than lazy enumerables, page large queries, and use stable element UniqueIds across turns. Include tested examples for querying, parameter changes, element creation, units, and family/project differences. The initial workflow is inspect, modify, then query to verify. The next extension adds visual observation and desktop actions for workflows requiring Revit UI; see [the desktop plan](docs/DESKTOP-UI-PLAN.md).
 
 **5. Revit execution rules and limits**
 
@@ -177,7 +179,7 @@ Keep Revit-dependent behavior behind small adapters so protocol and orchestratio
 
 Start with Phase 1. It addresses the main uncertainty before substantial UI porting. A rough planning allowance for one developer is 1–2 weeks for an internal end-to-end prototype and a further 2–4 weeks for packaging, compatibility, and failure handling, subject to the spike and access to required Revit builds. These are estimates, not measured commitments.
 
-MVP exclusions: autonomous multi-agent workers, opening extra Revit processes, cross-document coordination, persistent REPL variables, arbitrary NuGet packages, dedicated family/wall/parameter tools, screenshots, and an embedded WebView2 panel. Preserve extension points without implementing these features first.
+Original MVP exclusions: autonomous multi-agent workers, opening extra Revit processes, cross-document coordination, persistent REPL variables, arbitrary NuGet packages, dedicated family/wall/parameter tools, screenshots, and an embedded WebView2 panel. Screenshots and desktop input are now explicitly in scope for the next extension described below; this does not claim they are implemented.
 
 **10. Evidence and open decisions**
 

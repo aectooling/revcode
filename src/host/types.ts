@@ -1,5 +1,6 @@
 export interface Context {
   instanceId: string; revitVersion: string; revitBuild: string; runtime: string;
+  capturedAt?: string;
   document: null | { token: string; title: string; isFamily: boolean; isReadOnly: boolean; activeView: string; selection: string[] };
   documents?: NonNullable<Context['document']>[];
 }
@@ -12,7 +13,7 @@ export type Operation = Omit<ExecuteInput, 'documentToken'> & {
 };
 export interface Settings { provider: string; model: string; configured: boolean }
 export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string }
-export interface ProviderSummary { id: string; name?: string; models: { id: string; name: string }[]; authenticated?: boolean; authMethods?: { type: 'api_key' | 'oauth'; label: string }[]; credentialSource?: string; credentialLabel?: string; canLogout?: boolean }
+export interface ProviderSummary { id: string; name?: string; models: { id: string; name: string; supportsImages?: boolean }[]; authenticated?: boolean; authMethods?: { type: 'api_key' | 'oauth'; label: string }[]; credentialSource?: string; credentialLabel?: string; canLogout?: boolean }
 export interface AuthState { provider?: string; busy: boolean; notice?: string; url?: string; userCode?: string; error?: string; completedCount: number; request?: { requestId: string; prompt: string; placeholder?: string; password?: boolean; type: 'text' | 'secret' | 'manual_code' | 'select'; options?: readonly { id: string; label: string; description?: string }[] } }
 export interface CustomProvider { id: string; name?: string; baseUrl: string; apiKey?: string; models: { id: string; name?: string; supportsImages?: boolean }[] }
 export interface Agent {
@@ -23,6 +24,6 @@ export interface Agent {
   addProvider?(provider: CustomProvider): Promise<void>;
   configured(provider: string): boolean;
   setKey(provider: string, key: string): Promise<void>;
-  prompt(text: string, settings: Settings, context: Context, history: Message[], execute: (input: ExecuteInput, signal?: AbortSignal) => Promise<Operation>, update: (text: string) => void): Promise<void>;
+  prompt(text: string, settings: Settings, context: Context, history: Message[], execute: (input: ExecuteInput, signal?: AbortSignal) => Promise<Operation>, update: (text: string) => void, desktop?: import('./desktop-types.js').DesktopTools): Promise<void>;
   abort(): Promise<void>;
 }
