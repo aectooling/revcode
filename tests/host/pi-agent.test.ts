@@ -5,6 +5,38 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPiAgent } from '../../src/host/pi-agent.js';
 
+it('propagates real SDK cancellation to the host without streaming a generic abort as assistant text', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-abort-'));
+  let streaming = false;
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* Drain the local fixture request. */ }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ id: 'abort-fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta: { role: 'assistant', content: 'Inspecting Revit.' }, finish_reason: null }] })}\n\n`);
+    streaming = true; // Keep the response open until abort closes the request.
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  let agent: Awaited<ReturnType<typeof createPiAgent>> | undefined;
+  try {
+    agent = await createPiAgent(dir, dir, runtime => runtime.registerProvider('openai', {
+      api: 'openai-completions', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: 'fixture-key',
+      models: [{ id: 'fixture', name: 'Fixture', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }],
+    }));
+    let output = '';
+    const prompt = agent.prompt('Inspect Revit', { provider: 'openai', model: 'fixture', configured: true }, {
+      instanceId: 'fixture', revitVersion: '2026', revitBuild: '26.3', runtime: '.NET 8', document: null,
+    }, [], async () => { throw new Error('Unexpected execution'); }, value => { output = value; });
+    const rejected = expect(prompt).rejects.toThrow(/abort/i);
+    await expect.poll(() => streaming && output.includes('Inspecting Revit.')).toBe(true);
+    await agent.abort();
+    await rejected;
+    expect(output).toBe('Inspecting Revit.');
+  } finally {
+    await agent?.abort();
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
 it.each(['revit_execute_csharp', 'custom_capture'])('real Pi SDK advertises both tools and consumes %s results through a local model fixture', async scenario => {
   const toolName = scenario === 'custom_capture' ? 'revit_capture_view' : scenario;
   const dir = await mkdtemp(join(tmpdir(), 'revcode-pi-'));

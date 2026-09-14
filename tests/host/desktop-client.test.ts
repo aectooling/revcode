@@ -74,3 +74,42 @@ it('rejects a changed helper generation instead of replaying the request', async
   fixture.respond(fixture.requests.at(-1), {}, undefined, 'new-generation'); await rejected;
   expect(fixture.child.kill).toHaveBeenCalledOnce();
 });
+
+it('Stop cancels identity lookup without preventing an explicit later start', async () => {
+  const f = setup();
+  let release!: () => void;
+  fixture.execFile = (_exe: any, _args: any, _options: any, callback: any) => {
+    release = () => callback(null, { stdout: '639000000000000000' });
+  };
+  const starting = f.client.request('start');
+  const rejected = expect(starting).rejects.toThrow('stopped');
+  await f.client.stop(); release(); await rejected;
+  expect(f.launch).not.toHaveBeenCalled();
+  fixture.execFile = (_exe: any, _args: any, _options: any, callback: any) => callback(null, { stdout: '639000000000000000' });
+  await f.client.request('start');
+  expect(f.requests.map(r => r.kind)).toEqual(['hello', 'start']);
+});
+
+it('Stop during hello prevents start after the handshake completes', async () => {
+  const f = setup();
+  const starting = f.client.request('start');
+  const rejected = expect(starting).rejects.toThrow('stopped');
+  // launch resumes first, but the queued hello reply has not completed yet.
+  await Promise.resolve();
+  await f.client.stop(); await rejected;
+  expect(f.requests.map(r => r.kind)).not.toContain('start');
+  await f.client.request('start');
+  expect(f.requests.at(-1).kind).toBe('start');
+});
+
+it('reports native unknown input on an error response before rejecting the request', async () => {
+  const f = setup(); await f.client.request('start'); f.hold();
+  const states: unknown[] = []; f.client.onState = state => states.push(state);
+  const capture = f.client.request('observe');
+  const rejected = expect(capture).rejects.toThrow('Activation input failed');
+  await expect.poll(() => f.requests.at(-1).kind).toBe('observe');
+  f.child.stdout.write(JSON.stringify({ version: 1, requestId: f.requests.at(-1).requestId,
+    generation: 'generation-1', unknown: true, error: 'Activation input failed' }) + '\n');
+  await rejected;
+  expect(states).toContainEqual({ owned: false, unknown: true, inputUnknown: true, error: 'Activation input failed' });
+});

@@ -23,7 +23,7 @@ async function setup() {
       calls.push({ kind, input, id });
       if (kind === 'action') {
         const saved = JSON.parse(await readFile(join(dir, 'desktop/journal.json'), 'utf8'));
-        expect(saved.at(-1).receipt.status).toBe('unknown'); // intent precedes input
+        expect(saved.operations.at(-1).receipt.status).toBe('unknown'); // intent precedes input
         if (loseLeaseDuringAction) transport.onState?.({ owned: false, unknown: false });
         if (actionError) throw actionError;
         return { status: 'dispatched', inserted: 3 };
@@ -165,4 +165,97 @@ it('validates bounded desktop contracts and removes model-supplied process/dispa
   expect(() => validateAction({ ...base, action: 'type', text: '\ud800' })).toThrow();
   expect(() => validateAction({ ...base, action: 'key', keys: ['WIN'] })).toThrow();
   expect(() => validateObserve({ maxWidth: 9000 })).toThrow();
+});
+
+it('a revoked observation with a retained lease recovers without restarting or replaying', async () => {
+  const f = await setup(); const frame = await f.tools.observe({});
+  f.failAction(new DesktopRequestError('Observe before each action.'));
+  const action = { observationId: frame.observationId, action: 'click' as const, x: 0, y: 0 };
+  const result = await f.tools.action('stale', action);
+  expect(result.receipt.status).toBe('not-dispatched');
+  expect(result.observation?.actionable).toBe(true);
+  expect((await f.tools.observe({})).actionable).toBe(true);
+  await f.tools.action('stale', action);
+  expect(f.calls.filter(c => c.kind === 'start')).toHaveLength(1);
+  expect(f.calls.filter(c => c.kind === 'action')).toHaveLength(1);
+});
+
+it('an unused helper exit does not invalidate or interrupt the current API turn', async () => {
+  const f = await setup(); await f.tools.observe({}); await f.controller.endTurn();
+  f.controller.beginTurn('doc');
+  f.transport.onState?.({ owned: false, unknown: true, error: 'Helper exited' });
+  expect(f.controller.snapshot().status).toBe('unavailable');
+  expect(f.interruptions()).toBe(0);
+});
+
+it.each([false, true])('bounds observation-only recovery (always settling: %s)', async alwaysSettling => {
+  const f = await setup(); const request = f.transport.request;
+  let captures = 0;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'observe' && (++captures < 3 || alwaysSettling))
+      return { ...result as object, actionable: false, owned: true, recovery: 'observe', reason: 'Dialog settling' };
+    return result;
+  };
+  const frame = await f.tools.observe({});
+  expect(captures).toBe(3);
+  expect(frame.actionable).toBe(!alwaysSettling);
+  expect(f.calls.filter(c => c.kind === 'start')).toHaveLength(1);
+  expect(f.calls.some(c => c.kind === 'action')).toBe(false);
+});
+
+it('Stop during settling prevents another capture or actionable result', async () => {
+  const f = await setup(); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'observe') return { ...result as object, actionable: false, owned: true, recovery: 'observe' };
+    return result;
+  };
+  const capture = f.tools.observe({});
+  const rejected = expect(capture).rejects.toThrow('stopped');
+  await expect.poll(() => f.calls.some(c => c.kind === 'observe')).toBe(true);
+  await f.controller.stop(); await rejected;
+  expect(f.calls.filter(c => c.kind === 'observe')).toHaveLength(1);
+});
+
+it('preserves native interference reason when capture reports lease loss before heartbeat', async () => {
+  const f = await setup(); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'observe') return { ...result as object, actionable: false, owned: false, reason: 'Mouse moved during capture.' };
+    return result;
+  };
+  const frame = await f.tools.observe({});
+  expect(frame.reason).toBe('Mouse moved during capture.');
+  expect(f.controller.snapshot()).toMatchObject({ status: 'paused', error: frame.reason });
+  expect(f.calls.filter(c => c.kind === 'observe')).toHaveLength(1);
+});
+
+it('native unknown activation input fences API work and survives restart without an action entry', async () => {
+  const f = await setup();
+  f.transport.onState?.({ owned: false, unknown: true, inputUnknown: true, error: 'Activation key release failed.' });
+  expect(f.controller.fenced).toBe(true);
+  expect(f.interruptions()).toBe(1);
+  await f.controller.close(); // Flush the durable native fence.
+  const restarted = new DesktopController(f.transport, f.dir, () => {}, () => {});
+  await restarted.init();
+  expect(restarted.fenced).toBe(true);
+  expect(restarted.snapshot().operations).toEqual([]);
+  await expect(restarted.beginTurn('doc').observe({})).rejects.toThrow('confirmed outcome');
+});
+
+it('a late non-dispatch receipt cannot clear an independently reported native unknown fence', async () => {
+  const f = await setup(); const frame = await f.tools.observe({}); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    if (kind === 'action') {
+      f.transport.onState?.({ owned: false, unknown: true, inputUnknown: true, error: 'Native input release failed.' });
+      return { status: 'not-dispatched', inserted: 0, owned: false };
+    }
+    return request(kind, input, id);
+  };
+  const result = await f.tools.action('late-refusal', { observationId: frame.observationId, action: 'click', x: 0, y: 0 });
+  expect(result.receipt.status).toBe('not-dispatched');
+  expect(f.controller.snapshot().error).toBe('Native input release failed.');
+  expect(f.controller.fenced).toBe(true);
+  expect(result.observation?.actionable).toBe(false);
 });

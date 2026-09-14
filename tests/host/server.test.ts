@@ -48,20 +48,20 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000, deskto
 }
 
 describe('authenticated Revit host', () => {
-  it('reports the desktop interruption instead of the SDK generic abort', async () => {
+  it.each(['reject', 'resolve'])('reports the desktop interruption when the SDK %ss after abort', async completion => {
     const fixture = desktopFixture();
-    let rejectPrompt: ((error: Error) => void) | undefined;
+    let finishPrompt: (() => void) | undefined;
     const { host, api } = await setup({
       prompt: async (_text, _settings, _context, _history, _execute, _update, desktop) => {
         await desktop!.observe({});
-        await new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
+        await new Promise<void>((resolve, reject) => { finishPrompt = () => completion === 'resolve' ? resolve() : reject(new Error('Request was aborted')); });
       },
-      abort: async () => { rejectPrompt?.(new Error('Request was aborted')); },
+      abort: async () => { finishPrompt?.(); },
     }, 10000, fixture.transport);
     expect((await api('chat', { requestId: 'desktop-interruption', text: 'Inspect Revit' })).status).toBe(202);
-    await expect.poll(() => !!rejectPrompt).toBe(true);
-    fixture.transport.onState?.({ owned: false, unknown: false });
-    await expect.poll(() => host.snapshot().messages.at(-1)?.text).toContain('Desktop control paused');
+    await expect.poll(() => !!finishPrompt).toBe(true);
+    fixture.transport.onState?.({ owned: false, unknown: false, error: 'Desktop control paused: focus moved outside Revit.' });
+    await expect.poll(() => host.snapshot().messages.at(-1)?.text).toContain('focus moved outside Revit');
     expect(host.snapshot().messages.at(-1)?.text).not.toContain('Request was aborted');
   });
 

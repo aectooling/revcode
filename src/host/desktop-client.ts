@@ -11,6 +11,7 @@ export class DesktopClient implements DesktopTransport {
   onState?: DesktopTransport['onState'];
   private child?: ChildProcessWithoutNullStreams;
   private ready?: Promise<void>;
+  private cancellation = 0;
   private generation?: string;
   private failure?: Error;
   private timer?: NodeJS.Timeout;
@@ -18,9 +19,10 @@ export class DesktopClient implements DesktopTransport {
 
   constructor(private executable: string, private revitPid: number, private revitStartTicks: string) {}
 
-  private async launch() {
+  private async launch(cancellation: number) {
     if (!Number.isSafeInteger(this.revitPid) || this.revitPid <= 0 || !/^\d{15,20}$/.test(this.revitStartTicks)) throw new Error('Invalid Revit process identity. Reinstall the add-in.');
     const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', `(Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks.ToString()`], { windowsHide: true, timeout: 10000 });
+    if (cancellation !== this.cancellation) throw new DesktopRequestError('Desktop workflow stopped before launch.');
     const start = stdout.trim();
     if (!/^\d{15,20}$/.test(start)) throw new Error('Could not verify the host process identity.');
     if (this.failure) throw this.failure;
@@ -36,6 +38,7 @@ export class DesktopClient implements DesktopTransport {
         try {
           const response = JSON.parse(line);
           if (response.version !== 1 || typeof response.generation !== 'string' || (this.generation && response.generation !== this.generation)) throw new Error('Desktop protocol/generation changed.');
+          if (response.unknown === true) this.onState?.({ owned: false, unknown: true, inputUnknown: true, error: response.error ?? 'Native desktop input outcome is unknown.' });
           const waiter = this.pending.get(response.requestId);
           if (!waiter) continue;
           this.pending.delete(response.requestId); clearTimeout(waiter.timer);
@@ -55,7 +58,10 @@ export class DesktopClient implements DesktopTransport {
     this.timer = setInterval(() => {
       if (heartbeatPending) return;
       heartbeatPending = true;
-      void this.send('heartbeat', {}).then(value => this.onState?.(value as { owned: boolean; unknown: boolean }))
+      void this.send('heartbeat', {}).then(value => {
+        const state = value as { owned: boolean; unknown: boolean; error?: string };
+        this.onState?.({ ...state, inputUnknown: state.unknown });
+      })
         .catch(error => this.fail(error)).finally(() => { heartbeatPending = false; });
     }, 2000);
     this.timer.unref();
@@ -84,12 +90,19 @@ export class DesktopClient implements DesktopTransport {
   }
 
   async request(kind: 'start' | 'observe' | 'action', input: object = {}, requestId?: string) {
-    this.ready ??= this.launch().catch(error => { this.fail(error); throw error; });
+    const cancellation = this.cancellation;
+    this.ready ??= this.launch(cancellation).catch(error => {
+      if (error instanceof DesktopRequestError && cancellation !== this.cancellation) this.ready = undefined;
+      else this.fail(error);
+      throw error;
+    });
     await this.ready;
+    if (cancellation !== this.cancellation) throw new DesktopRequestError('Desktop workflow stopped before request.');
     return this.send(kind, input, requestId);
   }
 
   async stop() {
+    ++this.cancellation;
     if (!this.child || this.failure) return;
     await this.send('stop', {});
   }

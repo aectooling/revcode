@@ -27,7 +27,7 @@ internal static class Program
             var pending = 0; var executing = false;
             void Reply(string? id, object? result, string? error)
             {
-                if (!output.Writer.TryWrite(JsonSerializer.Serialize(new { version = 1, requestId = id, generation = session.Generation, result, error }, Json)))
+                if (!output.Writer.TryWrite(JsonSerializer.Serialize(new { version = 1, requestId = id, generation = session.Generation, unknown = session.Unknown, result, error }, Json)))
                 { session.Stop(); Application.ExitThread(); }
             }
             _ = Task.Run(async () =>
@@ -49,13 +49,14 @@ internal static class Program
                             var line = new UTF8Encoding(false, true).GetString(bytes.ToArray()); bytes.Clear();
                             var request = JsonSerializer.Deserialize<Request>(line, Json) ?? throw new InvalidDataException("Expected request object.");
                             if (request.Kind == "stop") session.RequestStop();
+                            var cancellationGeneration = session.CancellationGeneration;
                             if (Interlocked.Increment(ref pending) > 8) throw new InvalidDataException("Too many pending requests.");
                             pump.BeginInvoke(() =>
                             {
                                 Interlocked.Decrement(ref pending);
                                 if (executing && request.Kind is not ("stop" or "heartbeat")) { Reply(request.RequestId, null, "Another request is running."); return; }
                                 var previous = executing; executing = true;
-                                try { Reply(request.RequestId, session.Handle(request), null); }
+                                try { Reply(request.RequestId, session.Handle(request, cancellationGeneration), null); }
                                 catch (Exception error) { Reply(request.RequestId, null, error.Message); }
                                 finally { executing = previous; }
                             });

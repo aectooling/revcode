@@ -30,7 +30,7 @@ public sealed record Request(int Version, string RequestId, string Kind, string?
     string? Text = null, string[]? Keys = null, string? Direction = null, int? Notches = null,
     string? WindowRef = null, Bounds? Crop = null, int MaxWidth = 1600);
 
-public sealed record Receipt(string Status, int Inserted = 0, string? Error = null);
+public sealed record Receipt(string Status, int Inserted = 0, string? Error = null, bool? Owned = null, string? Recovery = null);
 
 // Retain every receipt for this generation. Refuse new actions when full rather than
 // evicting IDs and accidentally turning a retry into another physical action.

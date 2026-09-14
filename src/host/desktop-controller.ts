@@ -6,6 +6,7 @@ import type { DesktopActionInput, DesktopEvidence, DesktopObservation, DesktopOb
 
 export class DesktopController {
   private operations: DesktopOperation[] = [];
+  private nativeUnknown = false;
   private latest?: DesktopEvidence;
   private frame?: DesktopObservation;
   private status: DesktopState['status'];
@@ -27,30 +28,40 @@ export class DesktopController {
     this.status = transport ? 'idle' : 'unavailable';
     if (transport) transport.onState = state => {
       if (state.unknown) {
-        this.status = this.fenced || this.operations.some(op => op.receipt.status === 'unknown') ? 'unknown' : 'unavailable';
+        const newNativeUnknown = state.inputUnknown === true && !this.nativeUnknown;
+        this.nativeUnknown ||= state.inputUnknown === true;
+        const active = this.status === 'controlling' || this.pending || this.receivingAction || newNativeUnknown;
+        this.status = this.nativeUnknown || this.fenced || this.operations.some(op => op.receipt.status === 'unknown') ? 'unknown' : 'unavailable';
         this.error = state.error ?? 'Desktop helper unavailable. Inspect Revit before continuing.';
-        ++this.epoch; this.frame = undefined; this.interrupted(this.error);
+        if (active) ++this.epoch;
+        this.frame = undefined;
+        if (newNativeUnknown) void this.persist().catch(() => {});
+        if (active) this.interrupted(this.error);
       } else if (!state.owned && this.status === 'controlling') {
         // A refusal and heartbeat can arrive in the same stdout chunk. Let the
         // pending receipt distinguish a refusal from interruption after input.
-        if (this.receivingAction) this.lostLeaseDuringAction = true;
-        else this.pauseForLostLease();
+        if (this.receivingAction) { this.lostLeaseDuringAction = true; this.error = state.error; }
+        else this.pauseForLostLease(state.error);
       }
       this.changed();
     };
   }
 
-  private pauseForLostLease() {
+  private pauseForLostLease(reason?: string) {
     this.status = 'paused'; this.frame = undefined; ++this.epoch;
-    this.error ??= 'Desktop control paused: Revit lost focus, user input was detected, or the control lease expired.';
+    this.error = reason ?? this.error ?? 'Desktop control paused: Revit lost focus, user input was detected, or the control lease expired.';
     this.interrupted(this.error);
   }
 
   async init() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    try { this.operations = JSON.parse(await readFile(this.journal, 'utf8')); }
+    try {
+      const saved = JSON.parse(await readFile(this.journal, 'utf8'));
+      this.operations = Array.isArray(saved) ? saved : saved.operations;
+      this.nativeUnknown = !Array.isArray(saved) && saved.nativeUnknown === true;
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    if (this.operations.some(op => op.receipt.status === 'unknown')) {
+    if (this.nativeUnknown || this.operations.some(op => op.receipt.status === 'unknown')) {
       this.status = 'unknown'; this.error = 'A desktop action has no confirmed outcome. Inspect Revit; do not replay.';
     }
     // Artifacts are bounded per host; old frames never authorize input after restart.
@@ -62,7 +73,7 @@ export class DesktopController {
   snapshot(): DesktopState { return { available: !!this.transport && this.status !== 'unavailable', status: this.status, error: this.error, latest: this.latest, operations: this.operations.slice(-30) }; }
 
   private persist() {
-    const data = JSON.stringify(this.operations);
+    const data = JSON.stringify({ operations: this.operations, nativeUnknown: this.nativeUnknown });
     this.saveChain = this.saveChain.then(async () => {
       await writeFile(this.journal + '.tmp', data, { mode: 0o600 });
       await rename(this.journal + '.tmp', this.journal);
@@ -151,11 +162,12 @@ export class DesktopController {
           op.receipt = { status: error instanceof DesktopRequestError ? 'not-dispatched' : 'unknown', inserted: 0, error: (error as Error).message };
         }
         if (op.receipt.status === 'unknown') { this.status = 'unknown'; this.error = op.receipt.error; }
-        if (op.receipt.status === 'not-dispatched') {
-          this.status = 'paused'; this.error = op.receipt.error;
+        if (op.receipt.status === 'not-dispatched' && !this.fenced) {
+          if (this.lostLeaseDuringAction || op.receipt.owned === false) this.status = 'paused';
+          this.error = op.receipt.error;
         }
         this.receivingAction = false;
-        if (this.lostLeaseDuringAction && op.receipt.status === 'dispatched' && this.status === 'controlling') this.pauseForLostLease();
+        if ((this.lostLeaseDuringAction || op.receipt.owned === false) && op.receipt.status === 'dispatched' && this.status === 'controlling') this.pauseForLostLease();
         this.lostLeaseDuringAction = false;
         await this.persist(); this.changed();
         // A missing screenshot is separate from whether input was dispatched.
@@ -182,14 +194,28 @@ export class DesktopController {
 
   private async capture(input: DesktopObserveInput, passive = false): Promise<DesktopObservation> {
     const request = validateObserve(input);
-    const frame = await this.requireTransport().request('observe', request) as DesktopObservation;
+    const epoch = this.epoch;
+    let frame!: DesktopObservation;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      frame = await this.requireTransport().request('observe', request) as DesktopObservation;
+      if (frame?.actionable || frame?.recovery !== 'observe' || frame?.owned !== true || passive ||
+          this.status !== 'controlling' || epoch !== this.epoch || attempt === 2) break;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (epoch !== this.epoch || this.status !== 'controlling') break;
+    }
     if (!frame || !/^[a-f0-9]{32}$/.test(frame.observationId) || frame.mimeType !== 'image/png' || typeof frame.data !== 'string' || frame.data.length > 12 * 1024 * 1024 ||
       !Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width <= 0 || frame.height <= 0 || frame.width * frame.height > 4_000_000) throw new Error('Invalid desktop image response.');
     const png = Buffer.from(frame.data, 'base64');
     if (png.length < 24 || png.length > 8 * 1024 * 1024 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
       png.readUInt32BE(16) !== frame.width || png.readUInt32BE(20) !== frame.height) throw new Error('Invalid desktop PNG dimensions.');
     frame.context = this.contextSnapshot();
-    if (passive || this.fenced || this.status !== 'controlling') frame.actionable = false;
+    if (passive || this.fenced || this.status !== 'controlling' || epoch !== this.epoch || frame.owned === false) {
+      frame.actionable = false; frame.recovery = undefined;
+      frame.reason = frame.reason ?? this.error ?? 'Desktop control is not active.';
+    }
+    if (!passive && !frame.actionable && frame.recovery !== 'observe' && this.status === 'controlling') {
+      this.status = 'paused'; this.error = frame.reason ?? 'No actionable desktop observation.';
+    }
     const { data: _, ...metadata } = frame;
     const artifact = frame.observationId + '.png';
     await writeFile(resolve(this.directory, artifact), png, { mode: 0o600 });

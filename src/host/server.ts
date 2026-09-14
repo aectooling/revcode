@@ -248,7 +248,7 @@ export async function createHost(options: HostOptions) {
       }, text => { message.text = text.slice(0, 200000); broadcast(); }, {
         observe: (input, signal) => desktopTools.observe(input, withTurnSignal(signal)),
         action: (id, input, signal) => desktopTools.action(`${turnId}:${id}`, input, withTurnSignal(signal)),
-      }).catch(error => {
+      }).then(() => controller.signal.throwIfAborted()).catch(error => {
         const interruption = controller.signal.reason;
         const reason = controller.signal.aborted && interruption instanceof Error && interruption.name !== 'AbortError'
           ? desktop.snapshot().error ?? interruption.message
