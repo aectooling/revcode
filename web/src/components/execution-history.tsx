@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { Badge } from "./ui/badge";
 
 export type Operation = {
@@ -29,19 +30,41 @@ function statusVariant(status: string) {
 }
 
 export function ExecutionHistory({ operations }: { operations: Operation[] }) {
+  const contentId = useId();
+  const [expanded, setExpanded] = useState(
+    () => window.matchMedia("(min-width: 1024px)").matches,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setExpanded(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
+
   return (
     <aside
       aria-label="Execution history"
       className="max-h-[38dvh] w-full shrink-0 overflow-y-auto border-t border-line bg-panel px-3 py-3 lg:h-full lg:max-h-none lg:w-[320px] lg:border-t-0 lg:border-l"
     >
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="min-w-0 truncate text-[13px] font-semibold tracking-tight">
-          Execution history
-        </h2>
-        <Badge variant="neutral" className="shrink-0">
-          {operations.length} operations
-        </Badge>
-      </div>
+      <h2>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => setExpanded((value) => !value)}
+          className="flex w-full cursor-pointer items-center gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ink-soft"
+        >
+          <ChevronRight className={`size-3 shrink-0 text-muted transition-transform ${expanded ? "rotate-90" : ""}`} />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-tight">
+            Execution history
+          </span>
+          <Badge variant="neutral" className="shrink-0">
+            {operations.length} operations
+          </Badge>
+        </button>
+      </h2>
+      <div id={contentId} hidden={!expanded}>
       {operations.length === 0 ? (
         <p className="mt-2 text-[13px] text-muted">
           Code, diagnostics, and transaction outcomes will appear here after execution.
@@ -126,6 +149,7 @@ export function ExecutionHistory({ operations }: { operations: Operation[] }) {
           })}
         </div>
       )}
+      </div>
     </aside>
   );
 }
