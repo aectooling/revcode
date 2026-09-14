@@ -14,13 +14,18 @@ let commandCount = 0;
 let lastCommand;
 let heldOperation;
 let desktopStops = 0;
+let desktopStarts = 0, desktopRecovers = 0, desktopActive = false, desktopNeedsRecovery = false;
+let finishDesktop;
 const desktop = {
   request: async kind => {
+    if (kind === 'start') { desktopStarts++; desktopActive = true; return { status: 'owned' }; }
+    if (kind === 'recover') { desktopRecovers++; desktopNeedsRecovery = false; return { recovered: true }; }
     if (kind !== 'observe') throw new Error('Browser must not dispatch desktop input.');
     return { observationId: 'a'.repeat(32), windowRef: 'b'.repeat(32), title: 'Desktop smoke fixture', timestamp: new Date().toISOString(),
       bounds: { x: 0, y: 0, width: 1, height: 1 }, crop: { x: 0, y: 0, width: 1, height: 1 }, width: 1, height: 1, dpi: 96,
-      windows: [], actionable: false, backend: 'fixture', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
-  }, stop: async () => { desktopStops++; }, close: async () => {},
+      windows: [], actionable: desktopActive && !desktopNeedsRecovery, owned: desktopActive,
+      recovery: desktopNeedsRecovery ? 'input' : undefined, backend: 'fixture', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
+  }, stop: async () => { desktopStops++; desktopActive = false; }, close: async () => {},
 };
 const agent = {
   providers: [
@@ -95,7 +100,13 @@ const agent = {
       authMethods: [{ type: "api_key", label: "API key" }],
     });
   },
-  prompt: async (_text, _settings, _context, _history, execute, update) => {
+  prompt: async (_text, _settings, _context, _history, execute, update, desktopTools) => {
+    if (_text === 'Desktop recovery test') {
+      await desktopTools.observe({});
+      update('Desktop recovered and ready.');
+      await new Promise(resolve => { finishDesktop = resolve; });
+      return;
+    }
     update("Inspecting the active document…");
     const operation = await execute({
       code: "return new { name = ctx.Doc.Title };",
@@ -103,7 +114,7 @@ const agent = {
     });
     update(`The model query ${operation.status}.`);
   },
-  abort: async () => {},
+  abort: async () => { finishDesktop?.(); finishDesktop = undefined; },
 };
 const host = await createHost({
   instanceId: "browser-smoke",
@@ -358,6 +369,27 @@ try {
     page.getByText("The model query succeeded.", { exact: true }),
   ).toBeVisible();
   expect(commandCount).toBe(4);
+
+  await page.getByLabel('Message the assistant').fill('Desktop recovery test');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByText(/Desktop control starts in/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Screenshot', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
+  await expect.poll(() => host.snapshot().busy).toBe(false);
+  expect(desktopStarts).toBe(0);
+
+  desktopNeedsRecovery = true;
+  await page.getByLabel('Message the assistant').fill('Desktop recovery test');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByText(/Desktop control starts in/)).toBeVisible();
+  await expect(page.getByText(/Input detected — retrying in/)).toBeVisible();
+  await page.screenshot({ path: resolve('.local/desktop-recovery-countdown.png') });
+  await expect(page.getByText('Agent is using your mouse and keyboard', { exact: true })).toBeVisible();
+  await expect(page.getByText('Desktop recovered and ready.', { exact: true })).toBeVisible();
+  expect(desktopStarts).toBe(1); expect(desktopRecovers).toBe(1);
+  await page.getByRole('button', { name: 'Stop desktop', exact: true }).click();
+  await expect.poll(() => host.snapshot().busy).toBe(false);
+  await expect(page.getByText('Agent is using your mouse and keyboard', { exact: true })).toBeHidden();
 
   await mkdir(resolve(".local"), { recursive: true });
   await page.screenshot({

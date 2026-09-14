@@ -5,6 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPiAgent } from '../../src/host/pi-agent.js';
 import type { DesktopObservation } from '../../src/host/desktop-types.js';
+import { createDesktopTools } from '../../src/host/desktop-tools.js';
+
+it.each(['input', 'observe'] as const)('reports completed %s recovery as a continuation rather than a terminal tool error', async recovery => {
+  const frame = { actionable: true, observationId: 'a'.repeat(32), data: 'png', mimeType: 'image/png' } as DesktopObservation;
+  const tools = createDesktopTools({ observe: async () => frame, action: async () => ({
+    receipt: { status: 'not-dispatched', inserted: 0, recovery }, observation: frame,
+  }) }, true);
+  const result = await tools[1].execute('recovered', { observationId: frame.observationId, action: 'click', x: 0, y: 0 });
+  expect(result).toMatchObject({ isError: false, details: { recovered: true } });
+  expect(result.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('continue the task') });
+});
 
 it.each([true, false])('real Pi SDK transmits desktop images and gates actions on image capability (%s)', async vision => {
   const dir = await mkdtemp(join(tmpdir(), 'revcode-desktop-pi-'));

@@ -89,7 +89,7 @@ export class DesktopClient implements DesktopTransport {
     });
   }
 
-  async request(kind: 'start' | 'observe' | 'action', input: object = {}, requestId?: string) {
+  async request(kind: 'start' | 'recover' | 'observe' | 'action', input: object = {}, requestId?: string) {
     const cancellation = this.cancellation;
     this.ready ??= this.launch(cancellation).catch(error => {
       if (error instanceof DesktopRequestError && cancellation !== this.cancellation) this.ready = undefined;

@@ -2,7 +2,15 @@ namespace Revcode.Desktop;
 
 // Pure control policy shared by the watchdog and dispatch path. Native ownership
 // remains with the session's thread-affine mutex.
-internal sealed class ObservationRefreshException(string message) : InvalidOperationException(message);
+internal class ObservationRefreshException(string message) : InvalidOperationException(message);
+internal sealed class InputRecoveryException(string message) : ObservationRefreshException(message);
+
+internal sealed class InputSettling
+{
+    private TimeSpan lastActivity;
+    public void Sample(bool activity, TimeSpan now) { if (activity) lastActivity = now; }
+    public bool Ready(TimeSpan now) => now - lastActivity >= TimeSpan.FromMilliseconds(1500);
+}
 
 internal sealed class InputPolicy
 {
@@ -39,10 +47,11 @@ internal sealed class InputPolicy
         heartbeatAge > TimeSpan.FromSeconds(10) ? "Desktop control paused: the host heartbeat was missing for more than 10 seconds." :
         inactivityAge > TimeSpan.FromMinutes(2) ? "Desktop control paused: no input action was dispatched for two minutes." : null;
 
-    public static string? InterferenceReason(bool boundForeground, bool cursorUnchanged, bool heldInput) =>
-        !boundForeground ? "Desktop control paused: focus moved outside Revit. Activate Revit and start a new turn." :
-        heldInput ? "Desktop control paused: a key or mouse button is held. Release it and start a new turn." :
-        !cursorUnchanged ? "Desktop control paused: the mouse moved after the screenshot. Start a new turn and leave the mouse still during control." : null;
+    public static void RequireCursor(bool unchanged)
+    {
+        if (!unchanged)
+            throw new InputRecoveryException("Mouse movement detected. Release the mouse and keyboard; a fresh screenshot is required before continuing.");
+    }
 
     public void RequireObservation(bool leaseReady, bool actionable, string? requestedId, string actualId, TimeSpan age)
     {
@@ -78,7 +87,7 @@ internal static class InputDispatch
         catch (Exception error)
         {
             return new Receipt(inserted > 0 ? "unknown" : "not-dispatched", inserted, error.Message,
-                Recovery: inserted == 0 && error is ObservationRefreshException ? "observe" : null);
+                Recovery: inserted == 0 && error is InputRecoveryException ? "input" : inserted == 0 && error is ObservationRefreshException ? "observe" : null);
         }
     }
 }

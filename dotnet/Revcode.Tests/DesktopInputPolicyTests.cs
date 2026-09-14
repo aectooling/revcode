@@ -34,12 +34,33 @@ public class DesktopInputPolicyTests
     }
 
     [Fact]
-    public void RevitOwnedDialogFocusDoesNotCountAsExternalInterference()
+    public void InputMustStayQuietForOneAndAHalfSecondsBeforeRecovery()
     {
-        Assert.Null(InputPolicy.InterferenceReason(true, true, false));
-        Assert.Contains("outside Revit", InputPolicy.InterferenceReason(false, true, false));
-        Assert.Contains("mouse moved", InputPolicy.InterferenceReason(true, false, false));
-        Assert.Contains("held", InputPolicy.InterferenceReason(true, true, true));
+        var settling = new InputSettling();
+        settling.Sample(true, TimeSpan.Zero);
+        Assert.False(settling.Ready(TimeSpan.FromMilliseconds(1499)));
+        Assert.True(settling.Ready(TimeSpan.FromMilliseconds(1500)));
+        settling.Sample(true, TimeSpan.FromSeconds(2)); // A held key/mouse movement resets the quiet interval.
+        settling.Sample(false, TimeSpan.FromSeconds(3));
+        Assert.False(settling.Ready(TimeSpan.FromSeconds(3)));
+        Assert.True(settling.Ready(TimeSpan.FromMilliseconds(3500)));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void CursorChangeRefreshesBeforeInputButNeverReplaysPartialInput(int completedBatches)
+    {
+        var policy = new InputPolicy(); policy.Resume();
+        var injections = 0;
+        var receipt = InputDispatch.Run([Click, Click], () => { },
+            () => InputPolicy.RequireCursor(injections < completedBatches),
+            batch => { injections++; return batch.Length; }, (_, _) => { });
+        Assert.Equal(completedBatches, injections);
+        Assert.Equal(completedBatches == 0 ? "not-dispatched" : "unknown", receipt.Status);
+        Assert.Equal(completedBatches == 0 ? "input" : null, receipt.Recovery);
+        Assert.True(policy.LeaseReady(true, Fresh, Fresh));
+        InputPolicy.RequireCursor(true); // A new stable screenshot authorizes input.
     }
 
     [Theory]

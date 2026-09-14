@@ -30,6 +30,13 @@ internal sealed class DesktopSession : IDisposable
     private readonly DispatchLedger ledger = new();
     private readonly Stopwatch heartbeat = Stopwatch.StartNew(), inactivity = Stopwatch.StartNew();
     private readonly Stopwatch frameAge = Stopwatch.StartNew();
+    private readonly Stopwatch activityClock = Stopwatch.StartNew();
+    private readonly InputSettling settling = new();
+    private readonly ControlNotice notice = new();
+    private Win32.Point monitoredCursor;
+    private Win32.Point? pendingPointer;
+    private TimeSpan pointerSentAt;
+    private bool needsFocus;
     private readonly HashSet<(ushort Key, bool Unicode)> heldKeys = new();
     private bool heldButton, owned, hotkey, monitoring;
     private bool focusHotkey, focusHotkeyReceived;
@@ -47,8 +54,25 @@ internal sealed class DesktopSession : IDisposable
     public void RequestStop() => policy.Stop();
     public void FocusHotkey() { if (focusHotkey) focusHotkeyReceived = true; }
     private bool LeaseReady => policy.LeaseReady(owned, heartbeat.Elapsed, inactivity.Elapsed);
-    private bool Interference => Win32.GetForegroundWindow() != observationWindow ||
-        !Win32.GetCursorPos(out var point) || point.X != cursor.X || point.Y != cursor.Y || HumanHeldInput();
+    private bool CursorUnchanged => Win32.GetCursorPos(out var point) && point.X == cursor.X && point.Y == cursor.Y;
+    private bool InputReady => settling.Ready(activityClock.Elapsed);
+
+    private void SampleInput()
+    {
+        var available = Win32.GetCursorPos(out var point);
+        var moved = point.X != monitoredCursor.X || point.Y != monitoredCursor.Y;
+        // SendInput can finish before its cursor move is visible. Recognize only
+        // our expected destination for a short interval; other motion still waits.
+        if (pendingPointer is { } expected)
+        {
+            if (activityClock.Elapsed - pointerSentAt > TimeSpan.FromMilliseconds(500)) pendingPointer = null;
+            else if (available && Math.Abs(point.X - expected.X) <= 2 && Math.Abs(point.Y - expected.Y) <= 2) { moved = false; pendingPointer = null; }
+        }
+        var activity = !available || moved || HumanHeldInput();
+        settling.Sample(activity, activityClock.Elapsed);
+        if (available) monitoredCursor = point;
+        if (activity) observation = null;
+    }
 
     public DesktopSession(int targetPid, long startTicks, int parentPid, long parentTicks, bool enableInput, nint messageWindow)
     {
@@ -78,14 +102,18 @@ internal sealed class DesktopSession : IDisposable
         var foreground = Win32.GetForegroundWindow();
         var sameWindow = foreground == observationWindow;
         // Opening/closing a Revit-owned dialog is a normal result of input.
-        // Retain the lease, but revoke the old screenshot's authority. A window
-        // in another process (or outside Revit's owner chain) still stops control.
+        // Retain the lease while waiting for accidental input to settle. No input
+        // is authorized outside the bound window, and recovery never replays it.
         var windows = sameWindow ? [] : Windows();
         var boundForeground = sameWindow || windows.Any(w => Resolve(w.WindowRef, windows) == foreground);
-        var reason = InputPolicy.InterferenceReason(boundForeground,
-            Win32.GetCursorPos(out var point) && point.X == cursor.X && point.Y == cursor.Y, HumanHeldInput());
-        if (reason != null) Stop(reason);
-        else if (!sameWindow) observation = null;
+        // Cursor position alone cannot distinguish human motion from delayed
+        // SendInput processing or Revit repositioning it. Revalidate the frame
+        // at dispatch instead of revoking the entire turn.
+        SampleInput();
+        if (!boundForeground && !needsFocus) settling.Sample(true, activityClock.Elapsed);
+        needsFocus = !boundForeground;
+        if (!sameWindow) observation = null;
+        notice.Display(mainWindow, needsFocus || !InputReady);
     }
 
     private WindowInfo[] Windows()
@@ -95,10 +123,10 @@ internal sealed class DesktopSession : IDisposable
         Win32.EnumWindows((window, _) =>
         {
             if (Win32.Pid(window) != target.Id || !Win32.IsWindowVisible(window)) return true;
-            var menuOwner = Win32.ActiveMenuOwner(window);
-            if (!Win32.ControlWindow(window) && menuOwner == 0) return true;
+            var popupOwner = Win32.InputPopupOwner(window);
+            if (!Win32.ControlWindow(window) && popupOwner == 0) return true;
             // Restrict top-level windows to Revit's main window and its owner chain.
-            var owner = menuOwner != 0 ? menuOwner : window;
+            var owner = popupOwner != 0 ? popupOwner : window;
             for (var i = 0; i < 32 && owner != 0 && owner != main; i++) owner = Win32.GetWindow(owner, Win32.WindowOwner);
             if (main == 0 || owner != main) return true;
             if (!windowRefs.TryGetValue(window, out var reference)) windowRefs[window] = reference = Guid.NewGuid().ToString("N");
@@ -126,6 +154,7 @@ internal sealed class DesktopSession : IDisposable
         {
             case "heartbeat": heartbeat.Restart(); return new { owned, unknown = policy.Unknown, error = stopReason };
             case "start": return Start(cancellationGeneration);
+            case "recover": return Recover();
             case "observe": return Observe(request);
             case "action": return Act(request);
             default: throw new ArgumentException("Unknown request kind.");
@@ -148,6 +177,18 @@ internal sealed class DesktopSession : IDisposable
             hotkey = Win32.RegisterHotKey(messageWindow, 1, Win32.HotkeyControlAltNoRepeat, Win32.KeyF12);
             if (!hotkey) throw new InvalidOperationException("Could not register Ctrl+Alt+F12 emergency Stop.");
             heartbeat.Restart(); inactivity.Restart(); observation = null;
+            Win32.GetCursorPos(out monitoredCursor);
+            settling.Sample(true, activityClock.Elapsed);
+            notice.Display(mainWindow, true);
+            var quietWait = Stopwatch.StartNew();
+            while (!InputReady)
+            {
+                Application.DoEvents(); CheckIdentity();
+                if (!LeaseReady) throw new InvalidOperationException("Desktop activation stopped.");
+                SampleInput();
+                if (quietWait.Elapsed > TimeSpan.FromSeconds(10)) throw new InvalidOperationException("Mouse or keyboard stayed active. Release them before trying desktop control again.");
+                Thread.Sleep(25);
+            }
             focusMethod = "already-foreground";
             var main = mainWindow;
             if (main == 0) throw new InvalidOperationException("No Revit window.");
@@ -161,10 +202,37 @@ internal sealed class DesktopSession : IDisposable
             var window = Resolve(selected.WindowRef, windows);
             WaitForFocus(window, () => RequestForeground(window), () => Win32.GetForegroundWindow() == window && !Win32.IsIconic(window) && Win32.IsWindowEnabled(window));
             Win32.GetCursorPos(out cursor);
+            monitoredCursor = cursor; needsFocus = false;
             observationWindow = window; monitoring = true;
+            notice.Display(mainWindow, false);
             return new { status = "owned", focusMethod };
         }
         catch { Stop(); throw; }
+    }
+
+    private object Recover()
+    {
+        Tick();
+        if (!LeaseReady) throw new InvalidOperationException(stopReason ?? "Desktop control stopped.");
+        if (!InputReady) return new { recovered = false };
+        if (!needsFocus) return new { recovered = true };
+        // Host requests this only after its visible recovery countdown. Focus is
+        // attempted once per request; the host bounds these attempts per turn.
+        monitoring = false;
+        try
+        {
+            var windows = Windows();
+            var popup = Win32.GetLastActivePopup(mainWindow);
+            var window = windows.Select(w => Resolve(w.WindowRef, windows))
+                .Where(w => Win32.ControlWindow(w) && Win32.IsWindowEnabled(w))
+                .OrderByDescending(w => w == popup).FirstOrDefault();
+            if (window == 0) throw new InvalidOperationException("No enabled Revit window for recovery.");
+            WaitForFocus(window, () => RequestForeground(window), () => Win32.GetForegroundWindow() == window);
+            observationWindow = window; needsFocus = false; observation = null;
+            return new { recovered = true };
+        }
+        catch { Stop(); throw; }
+        finally { if (owned) monitoring = true; }
     }
 
     private void RequestForeground(nint window)
@@ -236,6 +304,7 @@ internal sealed class DesktopSession : IDisposable
         var width = Math.Min(request.MaxWidth, crop.Width); var height = Math.Max(1, (int)((long)crop.Height * width / crop.Width));
         if ((long)width * height > 4_000_000) throw new ArgumentException("Output exceeds four million pixels.");
         using var source = new Bitmap(crop.Width, crop.Height);
+        var cursorAvailable = Win32.GetCursorPos(out var captureCursor);
         frameAge.Restart();
         var timestamp = DateTimeOffset.UtcNow;
         using (var graphics = Graphics.FromImage(source)) graphics.CopyFromScreen(physical.X, physical.Y, 0, 0, source.Size, CopyPixelOperation.SourceCopy);
@@ -243,14 +312,19 @@ internal sealed class DesktopSession : IDisposable
         if (stream.Length > 8 * 1024 * 1024) throw new InvalidOperationException("PNG exceeds 8 MiB.");
         Tick();
         var currentWindows = Windows();
-        var actionable = LeaseReady && Win32.GetForegroundWindow() == window && foreground == window && Win32.IsWindowEnabled(window) && Signature(currentWindows) == Signature(windows) && !HumanHeldInput();
-        var reason = actionable ? null : !LeaseReady ? stopReason ?? "Desktop control is not active." : "Window or dialog changed during capture. Observe again.";
+        var cursorStable = cursorAvailable && Win32.GetCursorPos(out var currentCursor) && currentCursor.X == captureCursor.X && currentCursor.Y == captureCursor.Y;
+        var inputWaiting = !InputReady || needsFocus || !cursorStable || HumanHeldInput();
+        var actionable = LeaseReady && !inputWaiting && Win32.GetForegroundWindow() == window && foreground == window && Win32.IsWindowEnabled(window) && Signature(currentWindows) == Signature(windows);
+        var reason = actionable ? null : !LeaseReady ? stopReason ?? "Desktop control is not active." : inputWaiting
+            ? "Waiting for the mouse and keyboard to be released before resuming Revit control."
+            : "Cursor, window, or dialog changed during capture. Observe again.";
         var result = new Observation(Guid.NewGuid().ToString("N"), timestamp.ToString("O"), selected.WindowRef, selected.Title,
             bounds, physical, width, height, selected.Dpi, windows.FirstOrDefault(w => Resolve(w.WindowRef, windows) == foreground)?.WindowRef,
-            windows, actionable, "experimental-visible-gdi", "image/png", Convert.ToBase64String(stream.ToArray()), LeaseReady, !actionable && LeaseReady ? "observe" : null, reason);
+            windows, actionable, "experimental-visible-gdi", "image/png", Convert.ToBase64String(stream.ToArray()), LeaseReady, !actionable && LeaseReady ? inputWaiting ? "input" : "observe" : null, reason);
         if (actionable)
         {
             observation = result; observationWindow = window; windowsSignature = Signature(windows);
+            cursor = captureCursor;
         }
         return result;
     }
@@ -267,20 +341,21 @@ internal sealed class DesktopSession : IDisposable
         CheckIdentity();
         Tick();
         policy.RequireObservation(LeaseReady, frame.Actionable, request.ObservationId, frame.ObservationId, frameAge.Elapsed);
+        if (!InputReady || needsFocus || HumanHeldInput()) throw new InputRecoveryException("User input detected. Wait for quiet input and observe again.");
         if (!Win32.Interactive() || Win32.IsIconic(observationWindow) || !Win32.IsWindowEnabled(observationWindow) || Win32.GetForegroundWindow() != observationWindow || Win32.Geometry(observationWindow) != frame.Bounds || Signature(Windows()) != windowsSignature || Win32.GetDpiForWindow(observationWindow) != frame.Dpi)
             throw new ObservationRefreshException("Focus, window geometry, or dialogs changed. Observe again.");
-        if (Interference) throw new InvalidOperationException("Human input detected. Control paused.");
+        InputPolicy.RequireCursor(CursorUnchanged);
         if (request.Action is "move" or "click" or "scroll")
         {
             var (x, y) = Coordinates.Map(frame.Crop, frame.Width, frame.Height,
                 request.X ?? throw new ArgumentException("Pointer actions require x."),
                 request.Y ?? throw new ArgumentException("Pointer actions require y."));
             var hit = Win32.GetAncestor(Win32.WindowFromPoint(new() { X = x, Y = y }), Win32.RootAncestor);
-            // Native popup menus have a separate HWND. They must belong to this
+            // Native menus and WPF ribbon popups have a separate HWND. They must belong to this
             // observed Revit window and appear in its revalidated window set.
-            if (!Win32.PointerTargetAllowed(hit, observationWindow, Win32.ActiveMenuOwner(hit),
+            if (!Win32.PointerTargetAllowed(hit, observationWindow, Win32.InputPopupOwner(hit),
                 windowRefs.TryGetValue(hit, out var reference) && frame.Windows.Any(w => w.WindowRef == reference)))
-                throw new InvalidOperationException("Target point is occluded by another window.");
+                throw new InvalidOperationException($"Target point is occluded by another window (class: {Win32.ClassName(hit)}, process: {Win32.Pid(hit)}). No input was sent.");
         }
     }
 
@@ -290,7 +365,7 @@ internal sealed class DesktopSession : IDisposable
         Tick();
         if (observation == null)
         {
-            var refused = new Receipt("not-dispatched", Error: stopReason ?? "Observe before each action.", Owned: LeaseReady, Recovery: LeaseReady ? "observe" : null);
+            var refused = new Receipt("not-dispatched", Error: stopReason ?? "Observe before each action.", Owned: LeaseReady, Recovery: LeaseReady ? !InputReady || needsFocus ? "input" : "observe" : null);
             ledger.Begin(request); ledger.Complete(request, refused); return refused;
         }
         var frame = observation;
@@ -300,7 +375,7 @@ internal sealed class DesktopSession : IDisposable
         catch (ObservationRefreshException error) when (LeaseReady)
         {
             observation = null;
-            var refused = new Receipt("not-dispatched", Error: error.Message, Owned: true, Recovery: "observe");
+            var refused = new Receipt("not-dispatched", Error: error.Message, Owned: true, Recovery: error is InputRecoveryException ? "input" : "observe");
             ledger.Begin(request); ledger.Complete(request, refused); return refused;
         }
         catch { Stop(); throw; }
@@ -311,10 +386,18 @@ internal sealed class DesktopSession : IDisposable
                 ValidateObservation(request, frame);
             },
             batch => (int)Win32.SendInput((uint)batch.Length, batch, Marshal.SizeOf<Win32.Input>()),
-            (batch, count) => { TrackInserted(batch, count); Win32.GetCursorPos(out cursor); });
+            (batch, count) =>
+            {
+                TrackInserted(batch, count); Win32.GetCursorPos(out cursor); monitoredCursor = cursor;
+                if (count > 0 && request.Action is "move" or "click" or "scroll")
+                {
+                    var (x, y) = Coordinates.Map(frame.Crop, frame.Width, frame.Height, request.X!.Value, request.Y!.Value);
+                    pendingPointer = new Win32.Point { X = x, Y = y }; pointerSentAt = activityClock.Elapsed;
+                }
+            });
         if (receipt.Status == "unknown") policy.MarkUnknown();
         if (receipt.Status == "dispatched") inactivity.Restart();
-        else if (receipt.Recovery != "observe" || !LeaseReady) Stop();
+        else if (receipt.Recovery is not ("observe" or "input") || !LeaseReady) Stop();
         receipt = receipt with { Owned = LeaseReady, Recovery = LeaseReady ? receipt.Recovery : null };
         ledger.Complete(request, receipt);
         return receipt;
@@ -391,6 +474,8 @@ internal sealed class DesktopSession : IDisposable
         // releases resources, so a later explicit start keeps its generation.
         if (revokeStarts) policy.Stop();
         monitoring = false;
+        pendingPointer = null;
+        notice.Hide();
         observation = null;
         var releases = heldKeys.Select(k => Win32.KeyEvent(k.Key, true, k.Unicode)).ToList();
         if (heldButton) releases.Add(Win32.MouseEvent(Win32.LeftUp));
@@ -409,5 +494,5 @@ internal sealed class DesktopSession : IDisposable
         if (owned) { lease.ReleaseMutex(); owned = false; }
     }
 
-    public void Dispose() { Stop(); lease.Dispose(); target.Dispose(); parent.Dispose(); }
+    public void Dispose() { Stop(); notice.Dispose(); lease.Dispose(); target.Dispose(); parent.Dispose(); }
 }

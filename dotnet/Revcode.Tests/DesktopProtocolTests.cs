@@ -6,6 +6,20 @@ namespace Revcode.Tests;
 public class DesktopProtocolTests
 {
     [Theory]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x08000088L, true, 100u, 100u, 20u, 20u, true)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x08000088L, true, 100u, 200u, 20u, 20u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x08000088L, true, 100u, 100u, 20u, 30u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x080000a8L, true, 100u, 100u, 20u, 20u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x08000088L, false, 100u, 100u, 20u, 20u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;main]", 0L, 0x08000088L, true, 100u, 100u, 20u, 20u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x80L, true, 100u, 100u, 20u, 20u, false)]
+    [InlineData("tooltips_class32", 0x80000000L, 0x08000088L, true, 100u, 100u, 20u, 20u, false)]
+    [InlineData("HwndWrapper[DefaultDomain;;popup]", 0x80000000L, 0x08000088L, true, 0u, 0u, 0u, 0u, false)]
+    public void WpfPopupRequiresInteractivePopupStyleAndMatchingProcessAndThread(string className, long style, long extendedStyle,
+        bool enabled, uint pid, uint ownerPid, uint thread, uint ownerThread, bool expected) =>
+        Assert.Equal(expected, Win32.OwnedWpfPopup(className, style, extendedStyle, enabled, pid, ownerPid, thread, ownerThread));
+
+    [Theory]
     [InlineData(1, 1, 0, false, true)]
     [InlineData(2, 1, 1, true, true)]
     [InlineData(2, 1, 1, false, false)] // Menu appeared after observation.

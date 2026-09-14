@@ -36,7 +36,8 @@ async function setup(overrides: Partial<Agent> = {}, heartbeatMs = 10000, deskto
   const dir = await mkdtemp(join(tmpdir(), 'revcode-host-'));
   resources.push(() => rm(dir, { recursive: true, force: true }));
   const agent: Agent = { providers: [{ id: 'anthropic', models: [{ id: 'test-model', name: 'Test' }] }], configured: () => true, setKey: async () => {}, abort: async () => {}, prompt: async () => {}, ...overrides };
-  const host = await createHost({ instanceId: 'test-instance', nativeToken: 'native-secret', dataDir: dir, webDir: dir, agent, heartbeatMs, desktop });
+  const host = await createHost({ instanceId: 'test-instance', nativeToken: 'native-secret', dataDir: dir, webDir: dir, agent, heartbeatMs, desktop,
+    desktopTiming: { countdownMs: 0, recoveryDelayMs: 0, inputPollMs: 0, inputAttempts: 3 } });
   resources.push(() => host.close());
   const dealer = new Dealer({ receiveTimeout: 2000, linger: 0 }); dealer.connect(host.nativeEndpoint);
   resources.push(async () => dealer.close());

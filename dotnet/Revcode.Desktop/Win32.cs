@@ -91,6 +91,35 @@ internal static class Win32
     internal static bool ControlWindowStyle(long extendedStyle) => (extendedStyle & (0x80L | 0x08000000L)) == 0; // TOOLWINDOW / NOACTIVATE
     internal static bool ControlWindow(nint window) => ControlWindowStyle(GetWindowLongPtr(window, -20).ToInt64());
 
+    internal static string ClassName(nint window)
+    {
+        var name = new StringBuilder(256);
+        return GetClassName(window, name, name.Capacity) != 0 ? name.ToString() : "";
+    }
+
+    internal static nint InputPopupOwner(nint window)
+    {
+        var menuOwner = ActiveMenuOwner(window);
+        if (menuOwner != 0) return menuOwner;
+        var owner = GetWindow(window, WindowOwner);
+        if (owner == 0 || !IsWindowVisible(window)) return 0;
+        var thread = GetWindowThreadProcessId(window, out var pid);
+        var ownerThread = GetWindowThreadProcessId(owner, out var ownerPid);
+        return OwnedWpfPopup(ClassName(window), GetWindowLongPtr(window, -16).ToInt64(),
+            GetWindowLongPtr(window, -20).ToInt64(), IsWindowEnabled(window), pid, ownerPid, thread, ownerThread)
+            ? GetAncestor(owner, RootAncestor) : 0;
+    }
+
+    // Revit ribbon dropdowns are WPF Popup HWNDs, not #32768 native menus.
+    // Never promote these to the foreground/main window. Only accept them as
+    // observed pointer surfaces for their same-process, same-thread owner.
+    internal static bool OwnedWpfPopup(string className, long style, long extendedStyle, bool enabled,
+        uint pid, uint ownerPid, uint thread, uint ownerThread) =>
+        className.StartsWith("HwndWrapper[", StringComparison.Ordinal) &&
+        (style & 0x80000000L) != 0 && // WS_POPUP
+        (extendedStyle & (0x08000000L | 0x80L | 0x20L)) == (0x08000000L | 0x80L) && // NOACTIVATE + TOOLWINDOW, not click-through
+        enabled && pid != 0 && pid == ownerPid && thread != 0 && thread == ownerThread;
+
     internal static nint ActiveMenuOwner(nint window)
     {
         var name = new StringBuilder(256);
@@ -104,8 +133,8 @@ internal static class Win32
     internal static bool MenuOwnerMatches(uint flags, uint menuPid, uint ownerPid) =>
         (flags & (0x4 | 0x10)) != 0 && menuPid != 0 && menuPid == ownerPid;
 
-    internal static bool PointerTargetAllowed(nint hit, nint observedWindow, nint menuOwner, bool menuObserved) =>
-        hit != 0 && observedWindow != 0 && (hit == observedWindow || (menuOwner == observedWindow && menuObserved));
+    internal static bool PointerTargetAllowed(nint hit, nint observedWindow, nint popupOwner, bool popupObserved) =>
+        hit != 0 && observedWindow != 0 && (hit == observedWindow || (popupOwner == observedWindow && popupObserved));
 
     internal static nint MainWindow(int pid)
     {

@@ -14,7 +14,7 @@ export function createDesktopTools(desktop: DesktopTools | undefined, supportsIm
   return [
     {
       name: 'revit_ui_observe', label: 'Observe Revit desktop',
-      description: 'See the real Revit window, ribbon and owned dialogs as an image. On the first desktop observation in a turn the host acquires exclusive input control and attempts to focus Revit once. Capture itself is passive. Use a fresh actionable observation for each action; coordinates are relative to the returned image.',
+      description: 'See the real Revit window, ribbon and owned dialogs as an image. The host shows a hands-off countdown before acquiring input control. Accidental user input triggers a bounded wait and fresh observation, with a warning before returning focus to Revit. Use a fresh actionable observation for each action; coordinates are relative to the returned image.',
       parameters: Type.Object({ windowRef: Type.Optional(Type.String()), maxWidth: Type.Optional(Type.Integer({ minimum: 64, maximum: 2048 })),
         crop: Type.Optional(Type.Object({ x: Type.Integer({ minimum: 0 }), y: Type.Integer({ minimum: 0 }), width: Type.Integer({ minimum: 1 }), height: Type.Integer({ minimum: 1 }) })) }),
       execute: async (_id: string, input: DesktopObserveInput, signal?: AbortSignal) => {
@@ -31,8 +31,11 @@ export function createDesktopTools(desktop: DesktopTools | undefined, supportsIm
         direction: Type.Optional(Type.Union(['up', 'down', 'left', 'right'].map(value => Type.Literal(value)))), notches: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })) }),
       execute: async (id: string, input: DesktopActionInput, signal?: AbortSignal) => {
         const result = await requireDesktop().action(id, input, signal);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ receipt: result.receipt, captureError: result.captureError }) }, ...(result.observation ? content(result.observation) : [])],
-          details: { receipt: result.receipt, captureError: result.captureError }, isError: result.receipt.status !== 'dispatched' };
+        const recovered = result.receipt.status === 'not-dispatched' && result.receipt.inserted === 0 &&
+          ['input', 'observe'].includes(result.receipt.recovery ?? '') && result.observation?.actionable === true;
+        const nextStep = recovered ? 'No input was sent. Recovery completed. Use the returned fresh screenshot to choose the next action and continue the task.' : undefined;
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ receipt: result.receipt, captureError: result.captureError, nextStep }) }, ...(result.observation ? content(result.observation) : [])],
+          details: { receipt: result.receipt, captureError: result.captureError, recovered }, isError: result.receipt.status !== 'dispatched' && !recovered };
       },
     },
   ];

@@ -5,14 +5,14 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import type { Agent, AuthState, Context, ExecuteInput, Message, Operation, Settings } from './types.js';
 import { Router } from 'zeromq';
-import { DesktopController } from './desktop-controller.js';
+import { DesktopController, type DesktopTiming } from './desktop-controller.js';
 import type { DesktopTransport } from './desktop-types.js';
 
 const terminal = new Set(['succeeded', 'failed', 'cancelled']);
 const statuses = new Set(['compiling', 'queued', 'running', ...terminal, 'unknown']);
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 interface Persisted { messages: Message[]; operations: Operation[]; requests: Record<string, { fingerprint: string; response: object }>; settings: Settings }
-export interface HostOptions { instanceId: string; nativeToken: string; dataDir: string; webDir: string; agent: Agent; heartbeatMs?: number; userDir?: string; desktop?: DesktopTransport }
+export interface HostOptions { instanceId: string; nativeToken: string; dataDir: string; webDir: string; agent: Agent; heartbeatMs?: number; userDir?: string; desktop?: DesktopTransport; desktopTiming?: DesktopTiming }
 
 export async function createHost(options: HostOptions) {
   await mkdir(options.dataDir, { recursive: true, mode: 0o700 });
@@ -61,7 +61,7 @@ export async function createHost(options: HostOptions) {
     documentToken: context?.document?.token ?? null, documentTitle: context?.document?.title, capturedAt: context?.capturedAt,
     ageMs: context?.capturedAt && Number.isFinite(Date.parse(context.capturedAt)) ? Math.max(0, Date.now() - Date.parse(context.capturedAt)) : undefined,
     source: 'cached-native-context',
-  }));
+  }), options.desktopTiming);
   await desktop.init();
   const send = (res: ServerResponse, status: number, body?: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(body === undefined ? undefined : JSON.stringify(body)); };
   let sendChain = Promise.resolve();

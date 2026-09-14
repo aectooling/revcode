@@ -3,14 +3,14 @@ import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DesktopController, validateAction, validateObserve } from '../../src/host/desktop-controller.js';
+import { DesktopController, validateAction, validateObserve, type DesktopTiming } from '../../src/host/desktop-controller.js';
 import { DesktopRequestError } from '../../src/host/desktop-client.js';
 import type { DesktopObservation, DesktopTransport } from '../../src/host/desktop-types.js';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
-async function setup() {
+async function setup(timing: Partial<DesktopTiming> = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'revcode-desktop-'));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const calls: { kind: string; input?: any; id?: string }[] = [];
@@ -38,7 +38,8 @@ async function setup() {
       return { status: 'owned' };
     }, stop: async () => { stops++; }, close: async () => {},
   };
-  const controller = new DesktopController(transport, dir, () => { if (guardError) throw new Error(guardError); }, () => {}, () => { interruptions++; });
+  const controller = new DesktopController(transport, dir, () => { if (guardError) throw new Error(guardError); }, () => {}, () => { interruptions++; }, undefined,
+    { countdownMs: 0, recoveryDelayMs: 0, inputPollMs: 0, inputAttempts: 3, ...timing });
   await controller.init(); cleanup.push(() => controller.close().catch(() => {}));
   return { controller, transport, dir, calls, tools: controller.beginTurn('doc'),
     guard: (error: string) => { guardError = error; }, failAction: (error: Error) => { actionError = error; },
@@ -178,6 +179,136 @@ it('a revoked observation with a retained lease recovers without restarting or r
   await f.tools.action('stale', action);
   expect(f.calls.filter(c => c.kind === 'start')).toHaveLength(1);
   expect(f.calls.filter(c => c.kind === 'action')).toHaveLength(1);
+});
+
+it('cursor refresh returns a new frame and permits a new action in the same turn without replay', async () => {
+  const f = await setup(); const frame = await f.tools.observe({});
+  const request = f.transport.request;
+  let actions = 0;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'action' && ++actions === 1)
+      return { status: 'not-dispatched', inserted: 0, owned: true, recovery: 'observe', error: 'The cursor changed after the screenshot. Observe again before sending more input.' };
+    return result;
+  };
+  const input = { observationId: frame.observationId, action: 'click' as const, x: 0, y: 0 };
+  const refused = await f.tools.action('cursor-changed', input);
+  expect(refused.receipt).toMatchObject({ status: 'not-dispatched', recovery: 'observe' });
+  expect(refused.observation?.actionable).toBe(true);
+  expect(f.controller.snapshot().status).toBe('controlling');
+  expect(f.interruptions()).toBe(0);
+  await f.tools.action('cursor-changed', input);
+  expect(actions).toBe(1);
+  const next = await f.tools.action('fresh-click', { ...input, observationId: refused.observation!.observationId });
+  expect(next.receipt.status).toBe('dispatched');
+  expect(actions).toBe(2);
+  expect(f.calls.filter(c => c.kind === 'start')).toHaveLength(1);
+});
+
+it('publishes a preparation countdown and Stop cancels it before native launch', async () => {
+  const f = await setup({ countdownMs: 3000 });
+  const observation = f.tools.observe({});
+  const rejected = expect(observation).rejects.toThrow('stopped');
+  expect(f.controller.snapshot()).toMatchObject({ status: 'preparing', countdownEndsAt: expect.any(Number) });
+  expect(f.calls).toEqual([]);
+  await f.controller.stop(); await rejected;
+  expect(f.calls).toEqual([]);
+  expect(f.controller.snapshot().countdownEndsAt).toBeUndefined();
+});
+
+it('waits through accidental input then returns a new actionable frame without replaying an action', async () => {
+  const f = await setup(); const first = await f.tools.observe({}); const request = f.transport.request;
+  let recovering = true;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'action') return { status: 'not-dispatched', inserted: 0, owned: true, recovery: 'input' };
+    if (kind === 'recover') { recovering = false; return { recovered: true }; }
+    if (kind === 'observe' && recovering) return { ...result as object, actionable: false, owned: true, recovery: 'input' };
+    return result;
+  };
+  const result = await f.tools.action('accidental-input', { observationId: first.observationId, action: 'click', x: 0, y: 0 });
+  expect(result.receipt.status).toBe('not-dispatched');
+  expect(result.observation?.actionable).toBe(true);
+  expect(result.observation?.observationId).not.toBe(first.observationId);
+  expect(f.controller.snapshot().status).toBe('controlling');
+  expect(f.calls.filter(c => c.kind === 'action')).toHaveLength(1);
+  expect(f.calls.filter(c => c.kind === 'recover')).toHaveLength(1);
+  expect(f.interruptions()).toBe(0);
+});
+
+it('Stop during input recovery cancels the countdown and never reacquires focus', async () => {
+  const f = await setup({ recoveryDelayMs: 3000 }); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    return kind === 'observe' ? { ...result as object, actionable: false, owned: true, recovery: 'input' } : result;
+  };
+  const capture = f.tools.observe({}); const rejected = expect(capture).rejects.toThrow('stopped');
+  await expect.poll(() => f.controller.snapshot().status).toBe('recovering');
+  await f.controller.stop(); await rejected;
+  expect(f.calls.some(c => c.kind === 'recover' || c.kind === 'action')).toBe(false);
+});
+
+it('bounds quiet-input polling and releases the native lease if activity continues', async () => {
+  const f = await setup(); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    return kind === 'observe' ? { ...result as object, actionable: false, owned: true, recovery: 'input' } : result;
+  };
+  const frame = await f.tools.observe({});
+  expect(frame).toMatchObject({ actionable: false, owned: false });
+  expect(frame.recovery).toBeUndefined();
+  expect(f.controller.snapshot().status).toBe('paused');
+  expect(f.calls.filter(c => c.kind === 'recover')).toHaveLength(3);
+  expect(f.stops()).toBe(1);
+});
+
+it('limits automatic recovery to three episodes per turn', async () => {
+  const f = await setup(); const request = f.transport.request; let recovering = true;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'recover') recovering = false;
+    return kind === 'observe' && recovering ? { ...result as object, actionable: false, owned: true, recovery: 'input' } : result;
+  };
+  for (let i = 0; i < 3; i++) { recovering = true; expect((await f.tools.observe({})).actionable).toBe(true); }
+  recovering = true;
+  expect((await f.tools.observe({})).actionable).toBe(false);
+  expect(f.calls.filter(c => c.kind === 'recover')).toHaveLength(3);
+  expect(f.controller.snapshot().status).toBe('paused');
+});
+
+it('does not repeatedly take focus if input returns after a successful recovery request', async () => {
+  const f = await setup(); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'recover') return { recovered: true };
+    return kind === 'observe' ? { ...result as object, actionable: false, owned: true, recovery: 'input' } : result;
+  };
+  expect((await f.tools.observe({})).actionable).toBe(false);
+  expect(f.calls.filter(c => c.kind === 'recover')).toHaveLength(1);
+  expect(f.controller.snapshot().status).toBe('paused');
+});
+
+it('never recovers or replays an unknown action even if the helper offers input recovery', async () => {
+  const f = await setup(); const frame = await f.tools.observe({}); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => {
+    const result = await request(kind, input, id);
+    if (kind === 'action') return { status: 'unknown', inserted: 1, owned: true, recovery: 'input' };
+    return kind === 'observe' ? { ...result as object, actionable: false, owned: true, recovery: 'input' } : result;
+  };
+  const result = await f.tools.action('partial', { observationId: frame.observationId, action: 'click', x: 0, y: 0 });
+  expect(f.controller.fenced).toBe(true); expect(result.observation?.actionable).toBe(false);
+  expect(f.calls.some(c => c.kind === 'recover')).toBe(false);
+});
+
+it('fences contradictory zero-input refusals with nonzero inserted input', async () => {
+  const f = await setup(); const frame = await f.tools.observe({}); const request = f.transport.request;
+  f.transport.request = async (kind, input, id) => kind === 'action'
+    ? { status: 'not-dispatched', inserted: 1, owned: true, recovery: 'input' }
+    : request(kind, input, id);
+  const result = await f.tools.action('contradictory', { observationId: frame.observationId, action: 'click', x: 0, y: 0 });
+  expect(result.receipt.status).toBe('unknown');
+  expect(f.controller.fenced).toBe(true);
+  expect(f.calls.some(c => c.kind === 'recover')).toBe(false);
 });
 
 it('an unused helper exit does not invalidate or interrupt the current API turn', async () => {

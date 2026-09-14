@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 import { DesktopRequestError } from './desktop-client.js';
 import type { DesktopActionInput, DesktopEvidence, DesktopObservation, DesktopObserveInput, DesktopOperation, DesktopReceipt, DesktopState, DesktopTools, DesktopTransport } from './desktop-types.js';
 
+export interface DesktopTiming { countdownMs: number; recoveryDelayMs: number; inputPollMs: number; inputAttempts: number }
+const defaultTiming: DesktopTiming = { countdownMs: 3000, recoveryDelayMs: 3000, inputPollMs: 500, inputAttempts: 20 };
+
 export class DesktopController {
   private operations: DesktopOperation[] = [];
   private nativeUnknown = false;
@@ -13,6 +16,9 @@ export class DesktopController {
   private error?: string;
   private epoch = 0;
   private attempted = false;
+  private recoveries = 0;
+  private countdownEndsAt?: number;
+  private cancelDelay?: () => void;
   private pending = false;
   private receivingAction = false;
   private lostLeaseDuringAction = false;
@@ -22,7 +28,8 @@ export class DesktopController {
 
   constructor(private transport: DesktopTransport | undefined, dataDir: string,
     private guard: (documentToken: string | null) => void, private changed: () => void, private interrupted: (reason?: string) => void = () => {},
-    private contextSnapshot: () => DesktopObservation['context'] = () => undefined) {
+    private contextSnapshot: () => DesktopObservation['context'] = () => undefined,
+    private timing: DesktopTiming = defaultTiming) {
     this.directory = resolve(dataDir, 'desktop');
     this.journal = resolve(this.directory, 'journal.json');
     this.status = transport ? 'idle' : 'unavailable';
@@ -34,10 +41,11 @@ export class DesktopController {
         this.status = this.nativeUnknown || this.fenced || this.operations.some(op => op.receipt.status === 'unknown') ? 'unknown' : 'unavailable';
         this.error = state.error ?? 'Desktop helper unavailable. Inspect Revit before continuing.';
         if (active) ++this.epoch;
+        this.cancelDelay?.(); this.countdownEndsAt = undefined;
         this.frame = undefined;
         if (newNativeUnknown) void this.persist().catch(() => {});
         if (active) this.interrupted(this.error);
-      } else if (!state.owned && this.status === 'controlling') {
+      } else if (!state.owned && this.controlActive) {
         // A refusal and heartbeat can arrive in the same stdout chunk. Let the
         // pending receipt distinguish a refusal from interruption after input.
         if (this.receivingAction) { this.lostLeaseDuringAction = true; this.error = state.error; }
@@ -49,6 +57,7 @@ export class DesktopController {
 
   private pauseForLostLease(reason?: string) {
     this.status = 'paused'; this.frame = undefined; ++this.epoch;
+    this.cancelDelay?.(); this.countdownEndsAt = undefined;
     this.error = reason ?? this.error ?? 'Desktop control paused: Revit lost focus, user input was detected, or the control lease expired.';
     this.interrupted(this.error);
   }
@@ -69,8 +78,22 @@ export class DesktopController {
   }
 
   get inFlight() { return this.pending; }
+  private get controlActive() { return this.status === 'controlling' || this.status === 'recovering'; }
   get fenced() { return this.status === 'unknown'; }
-  snapshot(): DesktopState { return { available: !!this.transport && this.status !== 'unavailable', status: this.status, error: this.error, latest: this.latest, operations: this.operations.slice(-30) }; }
+  snapshot(): DesktopState { return { available: !!this.transport && this.status !== 'unavailable', status: this.status, countdownEndsAt: this.countdownEndsAt, error: this.error, latest: this.latest, operations: this.operations.slice(-30) }; }
+
+  private async delay(ms: number, epoch: number, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (epoch !== this.epoch) throw new Error('Desktop workflow stopped.');
+    await new Promise<void>(resolve => {
+      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); if (this.cancelDelay === done) this.cancelDelay = undefined; resolve(); };
+      const timer = setTimeout(done, ms);
+      this.cancelDelay = done;
+      signal?.addEventListener('abort', done, { once: true });
+    });
+    signal?.throwIfAborted();
+    if (epoch !== this.epoch) throw new Error('Desktop workflow stopped.');
+  }
 
   private persist() {
     const data = JSON.stringify({ operations: this.operations, nativeUnknown: this.nativeUnknown });
@@ -107,24 +130,31 @@ export class DesktopController {
   beginTurn(token: string | null): DesktopTools {
     const epoch = ++this.epoch;
     this.attempted = false;
+    this.recoveries = 0;
     this.frame = undefined;
     return {
       observe: (input, signal) => this.exclusive(async () => {
         this.check(epoch, token, signal);
         const transport = this.requireTransport();
         if (!this.attempted) {
-          this.attempted = true; // Focus acquisition is attempted once per turn.
+          this.attempted = true;
           try {
+            this.status = 'preparing'; this.error = undefined;
+            this.countdownEndsAt = Date.now() + this.timing.countdownMs; this.changed();
+            await this.delay(this.timing.countdownMs, epoch, signal);
+            this.check(epoch, token, signal);
+            this.countdownEndsAt = undefined;
             await transport.request('start');
             this.check(epoch, token, signal);
             this.status = 'controlling'; this.error = undefined;
           } catch (error) {
-            if (!this.fenced) this.status = 'paused';
+            if (!this.fenced && this.status !== 'unavailable') this.status = 'paused';
             this.error = (error as Error).message;
+            this.countdownEndsAt = undefined;
             await transport.stop(); throw error;
           }
         }
-        const frame = await this.capture(input);
+        const frame = await this.capture(input, false, signal, () => this.check(epoch, token, signal));
         this.check(epoch, token, signal);
         if (this.status !== 'controlling') frame.actionable = false;
         this.frame = frame.actionable ? frame : undefined;
@@ -156,7 +186,8 @@ export class DesktopController {
         this.lostLeaseDuringAction = false;
         try {
           const result = await this.requireTransport().request('action', action, op.operationId) as DesktopReceipt;
-          if (!result || !['dispatched', 'not-dispatched', 'unknown'].includes(result.status) || !Number.isInteger(result.inserted) || result.inserted < 0) throw new Error('Invalid desktop dispatch receipt.');
+          if (!result || !['dispatched', 'not-dispatched', 'unknown'].includes(result.status) || !Number.isInteger(result.inserted) || result.inserted < 0 ||
+              (result.status === 'not-dispatched' && result.inserted !== 0)) throw new Error('Invalid desktop dispatch receipt.');
           op.receipt = result;
         } catch (error) {
           op.receipt = { status: error instanceof DesktopRequestError ? 'not-dispatched' : 'unknown', inserted: 0, error: (error as Error).message };
@@ -172,10 +203,11 @@ export class DesktopController {
         await this.persist(); this.changed();
         // A missing screenshot is separate from whether input was dispatched.
         try {
-          const observation = await this.capture({});
+          const observation = await this.capture({}, false, signal, () => this.check(epoch, token, signal));
           if (epoch !== this.epoch || signal?.aborted || this.fenced || this.status !== 'controlling') observation.actionable = false;
           else this.guard(token);
           this.frame = observation.actionable ? observation : undefined;
+          if (observation.actionable && this.status === 'controlling') { this.error = undefined; this.changed(); }
           return { receipt: op.receipt, observation };
         } catch (error) { return { receipt: op.receipt, captureError: (error as Error).message }; }
       }),
@@ -192,16 +224,42 @@ export class DesktopController {
     });
   }
 
-  private async capture(input: DesktopObserveInput, passive = false): Promise<DesktopObservation> {
+  private async capture(input: DesktopObserveInput, passive = false, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
     const request = validateObserve(input);
     const epoch = this.epoch;
     let frame!: DesktopObservation;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let inputAttempts = 0;
+    let recoveryCompleted = false;
+    for (let attempt = 0; ; attempt++) {
       frame = await this.requireTransport().request('observe', request) as DesktopObservation;
+      if (!passive && !frame?.actionable && frame?.recovery === 'input' && frame?.owned === true && this.controlActive && epoch === this.epoch) {
+        check?.();
+        if (inputAttempts >= this.timing.inputAttempts || (inputAttempts === 0 && this.recoveries >= 3)) {
+          frame.recovery = undefined; frame.actionable = false; frame.owned = false;
+          frame.reason = 'Desktop control paused after repeated input interruptions. Release the mouse and keyboard and start a new turn.';
+          this.status = 'paused'; this.error = frame.reason; this.countdownEndsAt = undefined;
+          await this.requireTransport().stop(); break;
+        }
+        if (inputAttempts++ === 0) {
+          ++this.recoveries; this.status = 'recovering'; this.error = undefined;
+          this.countdownEndsAt = Date.now() + this.timing.recoveryDelayMs; this.changed();
+          await this.delay(this.timing.recoveryDelayMs, epoch, signal);
+          this.countdownEndsAt = undefined;
+        } else await this.delay(this.timing.inputPollMs, epoch, signal);
+        check?.();
+        if (!recoveryCompleted) {
+          const result = await this.requireTransport().request('recover') as { recovered?: boolean };
+          recoveryCompleted = result?.recovered === true;
+        }
+        check?.();
+        continue;
+      }
+      if (frame?.actionable && this.status === 'recovering' && epoch === this.epoch) { this.status = 'controlling'; this.error = undefined; this.changed(); }
       if (frame?.actionable || frame?.recovery !== 'observe' || frame?.owned !== true || passive ||
-          this.status !== 'controlling' || epoch !== this.epoch || attempt === 2) break;
-      await new Promise(resolve => setTimeout(resolve, 150));
-      if (epoch !== this.epoch || this.status !== 'controlling') break;
+          !this.controlActive || epoch !== this.epoch || attempt >= inputAttempts + 2) break;
+      await this.delay(150, epoch, signal);
+      check?.();
+      if (epoch !== this.epoch || !this.controlActive) break;
     }
     if (!frame || !/^[a-f0-9]{32}$/.test(frame.observationId) || frame.mimeType !== 'image/png' || typeof frame.data !== 'string' || frame.data.length > 12 * 1024 * 1024 ||
       !Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width <= 0 || frame.height <= 0 || frame.width * frame.height > 4_000_000) throw new Error('Invalid desktop image response.');
@@ -209,11 +267,11 @@ export class DesktopController {
     if (png.length < 24 || png.length > 8 * 1024 * 1024 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
       png.readUInt32BE(16) !== frame.width || png.readUInt32BE(20) !== frame.height) throw new Error('Invalid desktop PNG dimensions.');
     frame.context = this.contextSnapshot();
-    if (passive || this.fenced || this.status !== 'controlling' || epoch !== this.epoch || frame.owned === false) {
+    if (passive || this.fenced || !this.controlActive || epoch !== this.epoch || frame.owned === false) {
       frame.actionable = false; frame.recovery = undefined;
       frame.reason = frame.reason ?? this.error ?? 'Desktop control is not active.';
     }
-    if (!passive && !frame.actionable && frame.recovery !== 'observe' && this.status === 'controlling') {
+    if (!passive && !frame.actionable && frame.recovery !== 'observe' && this.controlActive) {
       this.status = 'paused'; this.error = frame.reason ?? 'No actionable desktop observation.';
     }
     const { data: _, ...metadata } = frame;
@@ -234,6 +292,7 @@ export class DesktopController {
 
   async stop() {
     ++this.epoch;
+    this.cancelDelay?.(); this.countdownEndsAt = undefined;
     this.frame = undefined;
     if (!this.fenced && this.transport && this.status !== 'unavailable') this.status = 'paused';
     this.changed();
