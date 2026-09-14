@@ -7,6 +7,7 @@ namespace Revcode.Desktop;
 
 internal static class Win32
 {
+    internal static readonly nuint InputTag = (nuint)BitConverter.ToUInt64(Guid.NewGuid().ToByteArray());
     internal const uint RootAncestor = 2;
     internal const uint WindowOwner = 4;
     internal const uint AbsoluteVirtualMove = 0x0001 | 0x4000 | 0x8000;
@@ -190,7 +191,7 @@ internal static class Win32
     internal static uint Pid(nint window) { GetWindowThreadProcessId(window, out var pid); return pid; }
     internal static Bounds Geometry(nint window) => GetWindowRect(window, out var rect) ? rect.Bounds : throw new Win32Exception();
     internal static Bounds Desktop => new(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
-    internal static Input MouseEvent(uint flags, int x = 0, int y = 0, uint data = 0) => new() { Data = new() { Mouse = new() { X = x, Y = y, Data = data, Flags = flags } } };
+    internal static Input MouseEvent(uint flags, int x = 0, int y = 0, uint data = 0) => new() { Data = new() { Mouse = new() { X = x, Y = y, Data = data, Flags = flags, Extra = InputTag } } };
     internal static Input KeyEvent(ushort key, bool up, bool unicode = false) => new()
     {
         Type = KeyboardInput,
@@ -198,6 +199,7 @@ internal static class Win32
         {
             Key = unicode ? (ushort)0 : key,
             Scan = unicode ? key : (ushort)0,
+            Extra = InputTag,
             Flags = (up ? KeyUp : 0) | (unicode ? UnicodeKey : key is >= 35 and <= 40 or 46 ? ExtendedKey : 0),
         } },
     };

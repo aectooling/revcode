@@ -249,13 +249,13 @@ export class DesktopController {
     } finally { this.changed(); }
   }
 
-  private async captureFrame(input: DesktopObserveInput, passive = false, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
-    const request = validateObserve(input);
+  private async observeWithRecovery(request: DesktopObserveInput, passive: boolean, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
     const epoch = this.epoch;
     let frame!: DesktopObservation;
     let inputAttempts = 0;
+    let observationRetries = 0;
     let recoveryCompleted = false;
-    for (let attempt = 0; ; attempt++) {
+    for (;;) {
       frame = await this.requireTransport().request('observe', request) as DesktopObservation;
       if (!passive && !frame?.actionable && frame?.recovery === 'input' && frame?.owned === true && this.controlActive && epoch === this.epoch) {
         check?.();
@@ -281,11 +281,18 @@ export class DesktopController {
       }
       if (frame?.actionable && this.status === 'recovering' && epoch === this.epoch) { this.status = 'controlling'; this.error = undefined; this.changed(); }
       if (frame?.actionable || frame?.recovery !== 'observe' || frame?.owned !== true || passive ||
-          !this.controlActive || epoch !== this.epoch || attempt >= inputAttempts + 2) break;
+          !this.controlActive || epoch !== this.epoch || observationRetries >= 2) break;
+      ++observationRetries;
       await this.delay(150, epoch, signal);
       check?.();
       if (epoch !== this.epoch || !this.controlActive) break;
     }
+    return frame;
+  }
+
+  private async captureFrame(input: DesktopObserveInput, passive = false, signal?: AbortSignal, check?: () => void): Promise<DesktopObservation> {
+    const epoch = this.epoch;
+    const frame = await this.observeWithRecovery(validateObserve(input), passive, signal, check);
     if (!frame || !/^[a-f0-9]{32}$/.test(frame.observationId) || frame.mimeType !== 'image/png' || typeof frame.data !== 'string' || frame.data.length > 12 * 1024 * 1024 ||
       !Number.isInteger(frame.width) || !Number.isInteger(frame.height) || frame.width <= 0 || frame.height <= 0 || frame.width * frame.height > 4_000_000) throw new Error('Invalid desktop image response.');
     const png = Buffer.from(frame.data, 'base64');

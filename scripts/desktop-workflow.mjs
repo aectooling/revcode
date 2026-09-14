@@ -1,12 +1,13 @@
-// Focus-neutral staging for the manual tester. The transport supplies PNG hashes
-// and persists every observation before it can authorize an action.
+// Manual-only image matching around the production controller's lifecycle.
+import { randomUUID } from 'node:crypto';
 export class DesktopWorkflow {
   reference;
 
-  constructor(send, wait, inputEnabled) {
-    this.send = send;
+  constructor(desktop, wait, inputEnabled, record) {
+    this.desktop = desktop;
     this.wait = wait;
     this.inputEnabled = inputEnabled;
+    this.record = record;
   }
 
   async run(command, signal) {
@@ -20,15 +21,15 @@ export class DesktopWorkflow {
     for (const field of ['version', 'requestId', 'generation', 'observationId'])
       if (field in fields) throw new Error(`${field} is managed by the driver.`);
 
-    const capture = fields.kind === 'observe' ? fields : this.reference.capture;
+    const { kind, ...options } = fields;
+    const capture = kind === 'observe' ? options : this.reference.capture;
     const reviewed = this.reference?.frame;
     this.reference = undefined;
     try {
       await this.wait(delaySeconds * 1000, signal);
       signal.throwIfAborted();
-      if (this.inputEnabled) await this.send({ kind: 'start' });
-      signal.throwIfAborted();
-      const frame = await this.send(capture);
+      const tools = this.inputEnabled ? this.desktop.beginTurn(null) : undefined;
+      const frame = await this.record(await (tools ? tools.observe(capture, signal) : this.desktop.observePassive(capture)));
       signal.throwIfAborted();
       this.reference = { capture, frame };
       if (fields.kind === 'observe') return;
@@ -37,15 +38,14 @@ export class DesktopWorkflow {
 
       // Consume the reviewed image even if transport fails. Never automatically retry.
       this.reference = undefined;
-      await this.send({ ...fields, observationId: frame.observationId });
+      const result = await tools.action(randomUUID(), { ...options, observationId: frame.observationId }, signal);
       signal.throwIfAborted();
-      // Post-action capture has its own receipt; failure cannot erase dispatch evidence.
-      const after = await this.send(capture);
+      if (result.observation) this.reference = { capture: {}, frame: await this.record(result.observation) };
       signal.throwIfAborted();
-      this.reference = { capture, frame: after };
+      return { receipt: result.receipt, captureError: result.captureError };
     } finally {
       if (signal.aborted) this.reference = undefined;
-      await this.send({ kind: 'stop' });
+      await this.desktop.endTurn();
     }
   }
 }

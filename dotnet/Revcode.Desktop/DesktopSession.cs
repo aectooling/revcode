@@ -33,6 +33,8 @@ internal sealed class DesktopSession : IDisposable
     private readonly Stopwatch frameAge = Stopwatch.StartNew();
     private readonly Stopwatch activityClock = Stopwatch.StartNew();
     private readonly InputSettling settling = new();
+    private InputMonitor? inputMonitor;
+    private long sampledInputRevision, observationInputRevision;
     private readonly ControlNotice notice = new();
     private Win32.Point monitoredCursor;
     private Win32.Point? pendingPointer;
@@ -69,7 +71,9 @@ internal sealed class DesktopSession : IDisposable
             if (activityClock.Elapsed - pointerSentAt > TimeSpan.FromMilliseconds(500)) pendingPointer = null;
             else if (available && Math.Abs(point.X - expected.X) <= 2 && Math.Abs(point.Y - expected.Y) <= 2) { moved = false; pendingPointer = null; }
         }
-        var activity = !available || moved || HumanHeldInput();
+        var revision = inputMonitor?.Revision.Value ?? sampledInputRevision;
+        var activity = revision != sampledInputRevision || !available || moved || HumanHeldInput();
+        sampledInputRevision = revision;
         settling.Sample(activity, activityClock.Elapsed);
         if (available) monitoredCursor = point;
         if (activity) observation = null;
@@ -97,6 +101,7 @@ internal sealed class DesktopSession : IDisposable
     {
         try { CheckIdentity(); } catch { Stop(); Application.ExitThread(); return; }
         if (!owned) return;
+        try { inputMonitor?.RequireRunning(); } catch { Stop("Desktop input monitor stopped."); return; }
         if (!LeaseReady) { Stop(policy.LeaseFailure(heartbeat.Elapsed, inactivity.Elapsed)); return; }
         if (!monitoring) return;
         if (!Win32.Interactive()) { Stop("Desktop session is no longer interactive."); return; }
@@ -175,6 +180,7 @@ internal sealed class DesktopSession : IDisposable
         if (!owned) throw new InvalidOperationException("Another Revcode host owns desktop input.");
         try
         {
+            inputMonitor = new InputMonitor();
             hotkey = Win32.RegisterHotKey(messageWindow, 1, Win32.HotkeyControlAltNoRepeat, Win32.KeyF12);
             if (!hotkey) throw new InvalidOperationException("Could not register Ctrl+Alt+F12 emergency Stop.");
             heartbeat.Restart(); inactivity.Restart(); observation = null;
@@ -288,6 +294,7 @@ internal sealed class DesktopSession : IDisposable
     {
         Tick();
         observation = null;
+        var capturedInputRevision = inputMonitor?.Revision.Value ?? 0;
         if (!Win32.Interactive()) throw new InvalidOperationException("Capture requires an active, unlocked Windows session. Unlock or reconnect the session running Revit (console or Remote Desktop).");
         var windows = Windows();
         var foreground = Win32.GetForegroundWindow();
@@ -314,7 +321,7 @@ internal sealed class DesktopSession : IDisposable
         Tick();
         var currentWindows = Windows();
         var cursorStable = cursorAvailable && Win32.GetCursorPos(out var currentCursor) && currentCursor.X == captureCursor.X && currentCursor.Y == captureCursor.Y;
-        var inputWaiting = !InputReady || needsFocus || !cursorStable || HumanHeldInput();
+        var inputWaiting = capturedInputRevision != (inputMonitor?.Revision.Value ?? 0) || !InputReady || needsFocus || !cursorStable || HumanHeldInput();
         var actionable = LeaseReady && !inputWaiting && Win32.GetForegroundWindow() == window && foreground == window && Win32.IsWindowEnabled(window) && Signature(currentWindows) == Signature(windows);
         var reason = actionable ? null : !LeaseReady ? stopReason ?? "Desktop control is not active." : inputWaiting
             ? "Waiting for the mouse and keyboard to be released before resuming Revit control."
@@ -326,9 +333,9 @@ internal sealed class DesktopSession : IDisposable
         if (actionable)
         {
             observation = result; observationWindow = window; windowsSignature = Signature(windows);
+            observationInputRevision = capturedInputRevision;
             cursor = captureCursor;
         }
-        notice.RecordObservation();
         return result;
     }
 
@@ -344,6 +351,9 @@ internal sealed class DesktopSession : IDisposable
         CheckIdentity();
         Tick();
         policy.RequireObservation(LeaseReady, frame.Actionable, request.ObservationId, frame.ObservationId, frameAge.Elapsed);
+        if (inputMonitor == null) throw new InvalidOperationException("Desktop input monitor is unavailable.");
+        inputMonitor.RequireRunning();
+        inputMonitor.Revision.RequireUnchanged(observationInputRevision);
         if (!InputReady || needsFocus || HumanHeldInput()) throw new InputRecoveryException("User input detected. Wait for quiet input and observe again.");
         if (!Win32.Interactive() || Win32.IsIconic(observationWindow) || !Win32.IsWindowEnabled(observationWindow) || Win32.GetForegroundWindow() != observationWindow || Win32.Geometry(observationWindow) != frame.Bounds || Signature(Windows()) != windowsSignature || Win32.GetDpiForWindow(observationWindow) != frame.Dpi)
             throw new ObservationRefreshException("Focus, window geometry, or dialogs changed. Observe again.");
@@ -360,6 +370,9 @@ internal sealed class DesktopSession : IDisposable
                 windowRefs.TryGetValue(hit, out var reference) && frame.Windows.Any(w => w.WindowRef == reference)))
                 throw new InvalidOperationException($"Target point is occluded by another window (class: {Win32.ClassName(hit)}, process: {Win32.Pid(hit)}). No input was sent.");
         }
+        // Window enumeration/hit-testing can take time; recheck the event revision
+        // at the dispatch boundary as well as before the native validations.
+        inputMonitor.Revision.RequireUnchanged(observationInputRevision);
     }
 
     private Receipt Act(Request request)
@@ -402,7 +415,6 @@ internal sealed class DesktopSession : IDisposable
         if (receipt.Status == "dispatched") inactivity.Restart();
         else if (receipt.Recovery is not ("observe" or "input") || !LeaseReady) Stop();
         receipt = receipt with { Owned = LeaseReady, Recovery = LeaseReady ? receipt.Recovery : null };
-        notice.RecordAction(request, receipt, frame);
         ledger.Complete(request, receipt);
         return receipt;
     }
@@ -495,6 +507,7 @@ internal sealed class DesktopSession : IDisposable
         }
         if (hotkey) { Win32.UnregisterHotKey(messageWindow, 1); hotkey = false; }
         ReleaseFocusHotkey();
+        inputMonitor?.Dispose(); inputMonitor = null;
         if (owned) { lease.ReleaseMutex(); owned = false; }
     }
 

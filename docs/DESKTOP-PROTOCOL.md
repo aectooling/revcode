@@ -3,7 +3,7 @@
 ## Countdown and accidental-input recovery
 
 Chat shows a three-second hands-off countdown before the first control request.
-The helper then waits for 1.5 seconds without cursor movement or held keys/buttons,
+The helper then waits for 1.5 seconds without input events, cursor movement or held keys/buttons,
 up to ten seconds, before acquiring foreground focus. Its non-activating,
 click-through notice stays visible above other windows until Stop or turn end.
 The chat Stop button cancels the countdown; Ctrl+Alt+F12 is registered once the
@@ -22,9 +22,16 @@ Recovery repeats observation, not input. A confirmed zero-input refusal plus a
 fresh actionable screenshot is returned to the model as a recoverable result with
 an instruction to continue the task. The model chooses a new action from that
 image. Existing request IDs remain deduplicated. Partial input remains unknown
-and is never replayed. User activity detection is best effort; brief input between
-watchdog samples may not be detected. Delayed agent cursor moves are recognized
+and is never replayed. Keyboard and mouse hooks on a dedicated message-pump thread
+retain an event revision, so a completed tap between watchdog samples invalidates
+the screenshot. Only this helper's tagged injected events are excluded. Revisions
+are checked across capture and at dispatch; Windows input is still not atomic
+against concurrent user activity. Delayed agent cursor moves are recognized
 only near their expected destination within 500 ms to avoid false interruptions.
+
+The native notice is static and shows status plus the emergency Stop shortcut.
+It does not capture or blur the desktop. Detailed previews and activity remain
+in chat. Input hooks follow Microsoft's [keyboard](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc) and [mouse](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelmouseproc) callback contracts; callbacks only update an atomic revision.
 
 ## Native menus, WPF popups and interruption reporting
 
@@ -46,7 +53,7 @@ Live validation on 2026-09-14 exercised the same helper across turns: after fore
 
 Use `--repeat` with `scripts/smoke-desktop-focus.mjs` to check a second turn with the same helper, switching to chat during the five-second pause. A fresh-helper-only smoke is insufficient to verify background focus permission.
 
-The helper is now bundled and launched on demand by the host, with `revit_ui_observe` and `revit_ui_action` registered in Pi. The integration is experimental; live Revit acceptance remains pending. No Revit API assemblies or automation framework are loaded in the helper. The standalone driver below remains available for isolated manual checks.
+The helper is now bundled and launched on demand by the host, with `revit_ui_observe` and `revit_ui_action` registered in Pi. The integration is experimental. The user reports testing computer use; that report predates the input-monitor and static-notice changes and does not establish coverage of those changes. No Revit API assemblies or automation framework are loaded in the helper. The standalone driver below remains available for isolated manual checks.
 
 ## Host and agent integration
 
@@ -61,11 +68,12 @@ For the installed workflow use `npm run build:install`, reopen Revit and chat wi
 Build a self-contained helper independently of Revit's runtime:
 
 ```powershell
+npm run build:host
 dotnet publish dotnet/Revcode.Desktop/Revcode.Desktop.csproj -c Release -r win-x64 --self-contained true -o artifacts/desktop-spike
 node scripts/desktop-spike.mjs artifacts/desktop-spike/Revcode.Desktop.exe <Revit-PID> artifacts/desktop-evidence --enable-input
 ```
 
-Use a disposable Revit project with no active API operation. The driver records intent and flushes it to disk before dispatch; it writes responses and PNG artifacts to a **new** evidence directory. Omit `--enable-input` for passive capture only. The helper itself takes Revit PID, Revit UTC start ticks, parent PID, parent UTC start ticks, and optionally `--enable-input`. Start identities are decimal strings on the command line, preserving 64-bit precision. The parent must keep the pipe open and send heartbeats. Normal integrity and an active, unlocked Windows session are required. Console and connected Remote Desktop sessions are allowed; disconnected sessions, inaccessible input desktops, and locked/secure desktops are rejected. The helper checks WTS connection state and matches its desktop to the input desktop without switching desktops. If Remote Desktop Services is unavailable, only a session attached to the physical console may pass the connection check.
+Use a disposable Revit project with no active API operation. The driver uses the production DesktopClient and DesktopController, including their heartbeat, recovery, durable action journal and unknown-outcome fences; it writes review metadata and PNG artifacts to a **new** evidence directory. Omit `--enable-input` for passive capture only. The helper itself takes Revit PID, Revit UTC start ticks, parent PID, parent UTC start ticks, and optionally `--enable-input`. Start identities are decimal strings on the command line, preserving 64-bit precision. The parent must keep the pipe open and send heartbeats. Normal integrity and an active, unlocked Windows session are required. Console and connected Remote Desktop sessions are allowed; disconnected sessions, inaccessible input desktops, and locked/secure desktops are rejected. The helper checks WTS connection state and matches its desktop to the input desktop without switching desktops. If Remote Desktop Services is unavailable, only a session attached to the physical console may pass the connection check.
 
 ## Manual staged testing
 
@@ -76,7 +84,7 @@ The driver accepts `observe`, `action`, and `stop` commands. It manages helper s
 3. Enter, for example, `{"kind":"action","action":"click","x":100,"y":100,"delaySeconds":5}` with the actual image coordinates. Activate Revit again during the delay and release all input.
 4. The driver reacquires control and captures a fresh frame. It sends the action using that new observation ID **only if the PNG hash, window identity, dialog set, crop, dimensions, bounds, and DPI match the reviewed evidence**. It captures afterward and releases control again.
 
-The default delay is three seconds, configurable from 1–30. Type `{"kind":"stop"}` at any time, including during staging; the driver reads Stop independently of pending work and bypasses journal writes for cancellation. Ctrl+Alt+F12 also stops the helper while its input lease is active. Staging itself holds no input lease. End-of-input cancels pending staging and closes the helper pipe.
+The manual staging delay is three seconds, configurable from 1–30, followed by the production three-second control countdown. Type `{"kind":"stop"}` at any time, including during staging; the driver reads Stop independently of pending work and bypasses journal writes for cancellation. Ctrl+Alt+F12 also stops the helper while its input lease is active. Staging itself holds no input lease. End-of-input cancels pending staging and closes the helper pipe.
 
 A changed image refuses the action and saves the new PNG for review. There is no automatic retry. Exact PNG equality is deliberately conservative: caret blinking, hover effects, animation, window changes, or a changed Revit tab can cause refusal. Review the newest PNG before explicitly submitting again. This check does not establish general visual targeting reliability. Passive capture without `--enable-input` remains available but cannot authorize actions. The driver's saved screenshots are review references after it releases control, never reusable actionable helper observations.
 
@@ -91,7 +99,7 @@ The transport is inherited UTF-8 stdin/stdout, one JSON object per line. Diagnos
 | `start` | Requires current generation and input flag. Acquires a user/session mutex and Ctrl+Alt+F12 hotkey, attempts foreground activation once; fails and releases ownership if refused. Explicitly start again after activating Revit. |
 | `stop` | Works without a generation. Cancels future input, releases helper-held keys/buttons and mutex. Does not undo or terminate Revit. |
 | `observe` | Optional opaque `windowRef`, window-relative physical `crop: {x,y,width,height}`, and `maxWidth` (64–2048, default 1600). Passive; never activates a window. |
-| `action` | Requires generation, fresh `observationId`, and one `action` below. Returns a dispatch receipt. The driver separately captures afterward. |
+| `action` | Requires generation, fresh `observationId`, and one `action` below. Returns a dispatch receipt. The production controller captures afterward. |
 
 Every request includes `version: 1`, a unique `requestId` (1–80 characters), and, except hello/Stop, the current `generation`. Request IDs for **actions** are deduplicated: identical requests retrieve the retained receipt; changed payloads are rejected. The 1024-entry in-memory ledger refuses further actions instead of evicting IDs. It does not survive a crash. A new helper rejects old-generation requests; the durable driver's journal must be inspected after a crash or timeout. Never construct a fresh ID to retry an uncertain action.
 
@@ -122,4 +130,4 @@ The native behavior follows Microsoft's [SendInput contract](https://learn.micro
 
 The session gate was checked on an active Windows RDP session on 2026-09-13 and accepted it. Regression tests cover active remote/console sessions, disconnected sessions, console fallback and inaccessible/secure desktops. Subsequent live focus checks brought Revit 2026 Home forward from the T3 chat window and restored it from minimized, obtaining actionable screenshots in both cases. No model-editing input was dispatched. The complete section-view workflow remains unverified.
 
-To repeat the focus check, build the host and helper, leave chat foreground (optionally minimize Revit), and run `node scripts/smoke-desktop-focus.mjs <helper.exe> <Revit-PID> <new-evidence-directory>`. It uses the production host desktop client to acquire control, save one screenshot and release control. Windows may still refuse activation for a blocking menu or inaccessible desktop; refusal is bounded, and input is never dispatched before verified foreground capture. Switching away during a workflow still pauses control.
+To repeat the focus check, build the host and helper, leave chat foreground (optionally minimize Revit), and run `node scripts/smoke-desktop-focus.mjs <helper.exe> <Revit-PID> <new-evidence-directory>`. It uses the production host desktop client and controller to run the countdown/recovery path, save one screenshot and release control. Windows may still refuse activation for a blocking menu or inaccessible desktop; refusal is bounded, and input is never dispatched before verified foreground capture. Switching away during a workflow still pauses control.
