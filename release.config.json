@@ -13,7 +13,6 @@
   "dataSchema": 1,
   "targets": [
     { "id": "2025-net8", "year": "2025", "runtimeMajor": 8, "minimumBuild": "25.0.0.0", "maximumBuildExclusive": "26.0.0.0" },
-    { "id": "2025-net10", "year": "2025", "runtimeMajor": 10, "minimumBuild": "25.0.0.0", "maximumBuildExclusive": "26.0.0.0" },
     { "id": "2026-net10", "year": "2026", "runtimeMajor": 10, "minimumBuild": "26.5.0.55", "maximumBuildExclusive": "27.0.0.0" },
     { "id": "2027-net10", "year": "2027", "runtimeMajor": 10, "minimumBuild": "27.0.0.0", "maximumBuildExclusive": "28.0.0.0" }
   ]

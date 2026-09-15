@@ -6,7 +6,7 @@ This is an early, full-trust prototype. Use a disposable project for your first 
 
 ## Install the local prototype
 
-Build prerequisites: Windows x64, the pinned Node, pnpm, and .NET SDK versions in `release.config.json` and `global.json`, and matching Revit API references. Revit 2025 supports separate .NET 8 and .NET 10 variants; Revit 2026 requires 2026.5+/.NET 10; Revit 2027 uses .NET 10. See [deployment and releases](docs/DEPLOYMENT.md) for compatibility, pnpm installation, signing, and release commands. Clients need Node for installation/CLI bootstrap; the running application uses bundled Node and self-contained helpers.
+Build prerequisites: Windows x64, the pinned Node, pnpm, and .NET SDK versions in `release.config.json` and `global.json`, and matching Revit API references. This release supports Revit 2025 on .NET 8 only; Revit 2026 requires 2026.5+/.NET 10; Revit 2027 uses .NET 10. See [deployment and releases](docs/DEPLOYMENT.md) for compatibility, pnpm installation, signing, and release commands. Clients need Node for installation/CLI bootstrap; the running application uses bundled Node and self-contained helpers.
 
 From PowerShell in this repository:
 
