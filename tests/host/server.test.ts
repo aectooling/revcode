@@ -524,6 +524,7 @@ describe("authenticated Revit host", () => {
   });
 
   it("passes desktop tools to chat and fences native edits after uncertain desktop input", async () => {
+    let actionCompleted = false;
     const fixture = desktopFixture();
     const { api, host } = await setup(
       {
@@ -543,6 +544,7 @@ describe("authenticated Revit host", () => {
             x: 0,
             y: 0,
           });
+          actionCompleted = true;
         },
       },
       10000,
@@ -566,6 +568,9 @@ describe("authenticated Revit host", () => {
         })
       ).status,
     ).toBe(409);
+    // The unknown status is visible before the action finishes persisting its
+    // receipt and releases the desktop lock. Wait before requesting a capture.
+    await expect.poll(() => actionCompleted).toBe(true);
     expect((await api("desktop/observe", {})).status).toBe(200);
     expect(host.snapshot().desktop.status).toBe("unknown");
   });

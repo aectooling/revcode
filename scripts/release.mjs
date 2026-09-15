@@ -16,6 +16,15 @@ const directory = () => join(root, 'artifacts', 'releases', pkg().version);
 const receiptPath = () => join(directory(), 'release.json');
 const versionFiles = ['package.json', 'package-lock.json', 'pnpm-lock.yaml'];
 
+export function requiresSigning(cfg) {
+  const policy = cfg.signing ?? 'signed';
+  if (!['signed', 'unsigned'].includes(policy)) throw new Error('signing must be signed or unsigned.');
+  return policy === 'signed';
+}
+export function assertSigning(cfg, receipt) {
+  if (receipt.signed !== requiresSigning(cfg)) throw new Error('Artifact signing status does not match release.config.json.');
+}
+
 export function nextVersion(version, kind) {
   if (!/^\d+\.\d+\.\d+$/.test(version) || !['patch', 'minor', 'major'].includes(kind)) throw new Error('Expected a stable version and patch/minor/major.');
   const [major, minor, patch] = version.split('.').map(Number);
@@ -54,8 +63,10 @@ function tools() {
   if (run('npm', ['--version']).stdout !== cfg.npmVersion) throw new Error(`npm ${cfg.npmVersion} required.`);
   if (run('pnpm', ['--version']).stdout !== cfg.pnpmVersion) throw new Error(`pnpm ${cfg.pnpmVersion} required for release testing.`);
   run('dotnet', ['--version'], { cwd: root });
-  for (const name of ['REVCODE_SIGNTOOL', 'REVCODE_CERT_SHA1', 'REVCODE_TIMESTAMP_URL']) if (!process.env[name]) throw new Error(`Set ${name} before a signed release.`);
-  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; if (-not (Test-Path -LiteralPath $env:REVCODE_SIGNTOOL)) { throw 'SignTool not found' }; $cert=Get-Item -LiteralPath ('Cert:\\CurrentUser\\My\\' + $env:REVCODE_CERT_SHA1); if (-not $cert.HasPrivateKey -or $cert.NotAfter -le (Get-Date)) { throw 'A valid signing certificate with private-key access is required' }"], { cwd: root });
+  if (requiresSigning(cfg)) {
+    for (const name of ['REVCODE_SIGNTOOL', 'REVCODE_CERT_SHA1', 'REVCODE_TIMESTAMP_URL']) if (!process.env[name]) throw new Error(`Set ${name} before a signed release.`);
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; if (-not (Test-Path -LiteralPath $env:REVCODE_SIGNTOOL)) { throw 'SignTool not found' }; $cert=Get-Item -LiteralPath ('Cert:\\CurrentUser\\My\\' + $env:REVCODE_CERT_SHA1); if (-not $cert.HasPrivateKey -or $cert.NotAfter -le (Get-Date)) { throw 'A valid signing certificate with private-key access is required' }"], { cwd: root });
+  }
   run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:REVCODE_PACKAGE_SCRIPT -RevitYears 2025,2026,2027 -RequireAllTargets -CheckOnly; if (-not $?) { exit 1 }'], { cwd: root, env: { REVCODE_PACKAGE_SCRIPT: join(root, 'scripts', 'package.ps1') }, inherit: true });
 }
 function preflight(version = pkg().version, resume = false) {
@@ -98,7 +109,7 @@ function prepareVersionPR() {
   git('push', '-u', cfg.remote, branch);
   const body = join(root, 'artifacts', 'version-pr.md');
   mkdirSync(join(root, 'artifacts'), { recursive: true });
-  writeFileSync(body, `Prepare version ${pkg().version} for release.\n\nAfter merge, build and test the signed tarball from the merged commit with pnpm run release:build, record live acceptance, then run pnpm run release:publish.\n`);
+  writeFileSync(body, `Prepare version ${pkg().version} for release.\n\nAfter merge, build and test the tarball from the merged commit with pnpm run release:build, record live acceptance, then run pnpm run release:publish.\n`);
   const prs = JSON.parse(gh('pr', 'list', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--json', 'url'));
   console.log(prs[0]?.url ?? gh('pr', 'create', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--title', `Release v${pkg().version}`, '--body-file', body));
 }
@@ -120,10 +131,11 @@ function build() {
   run('npm', ['run', 'test:deployment'], { cwd: root, inherit: true });
   const payload = join(dir, 'payload');
   // Invoke in PowerShell with environment data rather than interpolated shell arguments.
-  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:REVCODE_PACKAGE_SCRIPT -RevitYears 2025,2026,2027 -RequireAllTargets -Sign -OutputDirectory $env:REVCODE_PACKAGE_OUTPUT; if (-not $?) { exit 1 }'], {
-    cwd: root, env: { REVCODE_PACKAGE_SCRIPT: join(root, 'scripts', 'package.ps1'), REVCODE_PACKAGE_OUTPUT: payload }, inherit: true,
+  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:REVCODE_PACKAGE_SCRIPT -RevitYears 2025,2026,2027 -RequireAllTargets -Sign:($env:REVCODE_RELEASE_SIGN -eq "true") -OutputDirectory $env:REVCODE_PACKAGE_OUTPUT; if (-not $?) { exit 1 }'], {
+    cwd: root, env: { REVCODE_PACKAGE_SCRIPT: join(root, 'scripts', 'package.ps1'), REVCODE_PACKAGE_OUTPUT: payload, REVCODE_RELEASE_SIGN: String(requiresSigning(config())) }, inherit: true,
   });
   const info = verify(payload);
+  assertSigning(config(), info);
   const packOutput = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', dir], { cwd: `${payload}-npm` }).stdout);
   const packed = Array.isArray(packOutput) ? packOutput[0] : packOutput[pkg().name];
   if (!packed?.filename) throw new Error('npm pack did not report a tarball.');
@@ -132,7 +144,7 @@ function build() {
   save(receiptPath(), receipt);
   save(join(dir, 'artifact.json'), { ...receipt, steps: undefined });
   writeFileSync(join(dir, 'SHA256SUMS'), `${receipt.sha256}  ${receipt.tarball}\n`);
-  writeFileSync(join(dir, 'release-notes.md'), `# Revcode ${receipt.version}\n\nSource: ${receipt.sourceCommit}\n\nDescribe changes and known limitations before publication.\n`);
+  writeFileSync(join(dir, 'release-notes.md'), `# Revcode ${receipt.version}\n\nSource: ${receipt.sourceCommit}\n\nRevcode binaries: ${receipt.signed ? 'signed' : 'unsigned'}.\n\nDescribe changes and known limitations before publication.\n`);
   save(join(dir, 'acceptance.json'), { sourceCommit: receipt.sourceCommit, tarballSha256: receipt.sha256, cleanMachine: false, npm: false, pnpm: false, scriptsDisabled: false, failureRecovery: false, tests: receipt.targets.map(target => ({ target: target.id, year: target.year, build: '', runtimeVersion: '', tester: '', testedAt: '', addinLoad: false, compiler: false, browser: false, desktop: false })) });
   run(process.execPath, ['scripts/deployment/test-tarball.mjs', tarball], { cwd: root, inherit: true });
   receipt.steps.tarballTest = true; save(receiptPath(), receipt);
@@ -143,7 +155,7 @@ function prepared() {
   if (receipt.version !== pkg().version || receipt.sourceCommit !== git('rev-parse', 'HEAD') || receipt.sourceTree !== git('rev-parse', 'HEAD^{tree}')) throw new Error('Prepared artifact source no longer matches HEAD.');
   const bytes = readFileSync(join(dir, receipt.tarball));
   if (digest(bytes) !== receipt.sha256 || `sha512-${createHash('sha512').update(bytes).digest('base64')}` !== receipt.integrity) throw new Error('Prepared tarball changed.');
-  if (!receipt.signed) throw new Error('A signed artifact is required.');
+  assertSigning(config(), receipt);
   if (!receipt.steps.tarballTest) {
     run(process.execPath, ['scripts/deployment/test-tarball.mjs', join(dir, receipt.tarball)], { cwd: root, inherit: true });
     receipt.steps.tarballTest = true; save(receiptPath(), receipt);
