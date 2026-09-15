@@ -216,8 +216,9 @@ async function main() {
   else if (command === 'release') {
     preflight(nextVersion(pkg().version, kind)); bump(kind); commitVersion();
     const cfg = config();
-    const rules = JSON.parse(gh('api', `repos/${cfg.repository}/rules/branches/${cfg.branch}`));
-    if (cfg.versionPullRequest || rules.some(rule => rule.type === 'pull_request')) {
+    // An explicit policy also works on private GitHub plans without the rules API.
+    const versionPullRequest = cfg.versionPullRequest ?? JSON.parse(gh('api', `repos/${cfg.repository}/rules/branches/${cfg.branch}`)).some(rule => rule.type === 'pull_request');
+    if (versionPullRequest) {
       prepareVersionPR();
       return;
     }

@@ -87,7 +87,7 @@ Version-only commands synchronize npm package and lockfile versions. pnpm lockfi
 
 Sequence: **preflight → bump → version commit/PR merge → build/sign/pack → exact-tarball tests and live acceptance → annotated tag → draft GitHub release/assets → npm publication → publish GitHub release**.
 
-GitHub pull-request rules are checked for one-command releases. Set `versionPullRequest: true` to force the PR route, including repositories using other protection mechanisms. The command creates a version PR and pauses. After merge, check out the merged release branch and run `release:build`. A rejected direct push is never forced; merge a version PR and rebuild from the resulting commit.
+This repository explicitly sets `versionPullRequest: true`: one-command releases create a version PR and pause. This also works on private GitHub plans that do not expose the branch-rules API. After merge, check out the merged release branch and run `pnpm run release:build`. If the setting is omitted, the release command checks GitHub pull-request rules; an explicit `false` selects the direct route. A rejected protected-branch push falls back to a version PR and is never forced. Build and test again from the final merged commit before publication.
 
 A local maintainer release necessarily pauses for live acceptance. After `release:build`, fill in `artifacts/releases/<version>/acceptance.json` and `release-notes.md`, then run `release:publish`. Acceptance must identify the exact commit, tarball SHA-256, tested Revit build/runtime, tester/date, and successful add-in/compiler/browser/desktop checks for every target. Clean-machine, both package managers, scripts-disabled, and failure-recovery evidence are mandatory. Never mark unperformed tests as passed.
 

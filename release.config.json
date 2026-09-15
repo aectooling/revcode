@@ -1,5 +1,6 @@
 {
   "branch": "main",
+  "versionPullRequest": true,
   "remote": "origin",
   "repository": "aectooling/revcode",
   "registry": "https://registry.npmjs.org/",
