@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+    <Reference Include="RevitAPI"><HintPath>$(RevitInstallDir)/RevitAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="RevitAPIUI"><HintPath>$(RevitInstallDir)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

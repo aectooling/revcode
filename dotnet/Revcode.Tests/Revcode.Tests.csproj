@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <ProjectReference Include="../Revcode.Compiler/Revcode.Compiler.csproj" />
+    <Compile Include="../Revcode.Revit/SessionIdentityRegistry.cs" Link="SessionIdentityRegistry.cs" />
+    <Compile Include="../Revcode.Revit/HostLifecycle.cs" Link="HostLifecycle.cs" />
+    <Compile Include="../Revcode.Revit/BatchExecutor.cs" Link="BatchExecutor.cs" />
+    <Compile Include="../Revcode.Desktop/Protocol.cs" Link="DesktopProtocol.cs" />
+    <Compile Include="../Revcode.Desktop/Win32.cs" Link="DesktopWin32.cs" />
+    <Compile Include="../Revcode.Desktop/InputPolicy.cs" Link="DesktopInputPolicy.cs" />
+    <Compile Include="../Revcode.Desktop/InputMonitor.cs" Link="DesktopInputMonitor.cs" />
+    <Compile Include="../Revcode.Desktop/FocusHandoff.cs" Link="DesktopFocusHandoff.cs" />
+  </ItemGroup>
+</Project>

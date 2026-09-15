@@ -1,0 +1,9 @@
+allowBuilds:
+  # These packages ship usable JavaScript; their install scripts are optional.
+  '@google/genai': false
+  protobufjs: false
+  # Required for the bundler and native Revit transport dependency.
+  esbuild: true
+  zeromq: true
+minimumReleaseAgeExclude:
+  - tailwind-merge@3.7.0

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-windows7.0": {
+      "NetMQ": {
+        "type": "Direct",
+        "requested": "[4.0.4.3, )",
+        "resolved": "4.0.4.3",
+        "contentHash": "tJMTBVWneQgG4qwhcmDgK5wy7b4WWh+WovqzfCHp6dNcEkHSGxFRDvhlbFv758QCX/4RzblYGFVt9USEHh0B7w==",
+        "dependencies": {
+          "AsyncIO": "0.1.69",
+          "NaCl.Net": "0.1.13",
+          "System.ServiceModel.Primitives": "10.0.652802"
+        }
+      },
+      "AsyncIO": {
+        "type": "Transitive",
+        "resolved": "0.1.69",
+        "contentHash": "xyXJLi+wjy6AtIyWXHXJkPS0gItqVT4lg5w++7bA5YEjugYKdrFMGxCo6KUJ1yYwjriLQJ1g35LDljZs3Q90XQ=="
+      },
+      "Microsoft.Extensions.ObjectPool": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "bpeCq0IYmVLACyEUMzFIOQX+zZUElG1t+nu1lSxthe7B+1oNYking7b91305+jNB6iwojp9fqTY9O+Nh7ULQxg=="
+      },
+      "NaCl.Net": {
+        "type": "Transitive",
+        "resolved": "0.1.13",
+        "contentHash": "AVg1455RQnyTy6tiessudruZHvbl70QWRPyx3og2I1Fei17LDNc7Z3DRgqN2+PsySBui/1EDP4A7adhQXydi6g=="
+      },
+      "System.ServiceModel.Primitives": {
+        "type": "Transitive",
+        "resolved": "10.0.652802",
+        "contentHash": "ULfGNl75BNXkpF42wNV2CDXJ64dUZZEa8xO2mBsc4tqbW9QjruxjEB6bAr4Z/T1rNU+leOztIjCJQYsBGFWYlw==",
+        "dependencies": {
+          "Microsoft.Extensions.ObjectPool": "10.0.0"
+        }
+      }
+    },
+    "net10.0-windows7.0/win-x64": {}
+  }
+}
