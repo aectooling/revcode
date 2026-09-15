@@ -37,7 +37,7 @@ for (let index = 0; index < args.length; index++) {
 }
 
 if (switches.has("Help")) {
-  console.log(`Usage: npm run build:install [-- options]
+  console.log(`Usage: pnpm run build:install [options]
 
 Build, verify, and install the local Revcode add-in for Revit.
 Runs the production build, stages a versioned package with the bundled

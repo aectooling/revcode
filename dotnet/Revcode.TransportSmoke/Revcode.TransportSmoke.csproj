@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net8.0-windows</TargetFramework><OutputType>Exe</OutputType></PropertyGroup>
+  <PropertyGroup><TargetFramework>net$(RevitRuntime).0-windows</TargetFramework><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
-    <PackageReference Include="NetMQ" Version="4.0.2.2" />
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.4" />
+    <PackageReference Include="NetMQ" Version="4.0.2.2" Condition="'$(RevitRuntime)' == '8'" />
+    <PackageReference Include="NetMQ" Version="4.0.4.3" Condition="'$(RevitRuntime)' == '10'" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.4" Condition="'$(RevitRuntime)' == '8'" />
   </ItemGroup>
 </Project>

@@ -13,7 +13,8 @@ if ($Help) {
 Build, verify, and install the local Revcode add-in for Revit on Windows x64.
 Runs the production host/browser build, stages a versioned package with the
 bundled Node runtime and dependencies, and registers it for your user.
-Requires Node.js 22.19+, the .NET SDK, and installed Revit API assemblies.
+Requires pinned Node/.NET SDK versions and compatible Revit API references.
+Revit 2026 requires version 2026.5 or newer (.NET 10).
 
 Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-install.ps1 [options]
   -OpenRevit   Open Revit after installation.
@@ -64,7 +65,7 @@ try {
                 $revitExe = "C:\Program Files\Autodesk\Revit $year\Revit.exe"
                 if (Test-Path -LiteralPath $revitExe) {
                     Write-Host "[revcode] Starting Revit $year"
-                    Start-Process -FilePath $revitExe
+                    Start-Process -FilePath $revitExe -WindowStyle Normal
                     break
                 }
             }

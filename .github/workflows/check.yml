@@ -14,20 +14,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.3
           cache: npm
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
             8.0.x
-            10.0.x
+            10.0.301
       - run: npm ci
       - run: npm run check
+      - run: npm run test:deployment
       - run: node scripts/smoke-host-lifecycle.mjs
       - run: dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release
       - run: dotnet build dotnet/Revcode.Desktop/Revcode.Desktop.csproj -c Release
       - run: node --check scripts/desktop-spike.mjs
       - run: node --test scripts/desktop-workflow.test.mjs
-      - run: dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release
+      - run: npm run test:transport
       # Revit add-ins need the installed Autodesk API assemblies; run packaged
       # native smoke tests on a licensed Windows workstation, not hosted CI.

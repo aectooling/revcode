@@ -6,20 +6,20 @@ This is an early, full-trust prototype. Use a disposable project for your first 
 
 ## Install the local prototype
 
-Build prerequisites: Windows x64, Node.js 22.19+, a .NET 10 SDK (which can build the .NET 8 targets), and installed Revit API assemblies for the selected year. Revit 2025/2026 builds target .NET 8; the 2027 build targets .NET 10. End users of a built package need Revit, but do not need Node or a .NET SDK.
+Build prerequisites: Windows x64, the pinned Node, pnpm, and .NET SDK versions in `release.config.json` and `global.json`, and matching Revit API references. Revit 2025 supports separate .NET 8 and .NET 10 variants; Revit 2026 requires 2026.5+/.NET 10; Revit 2027 uses .NET 10. See [deployment and releases](docs/DEPLOYMENT.md) for compatibility, pnpm installation, signing, and release commands. Clients need Node for installation/CLI bootstrap; the running application uses bundled Node and self-contained helpers.
 
 From PowerShell in this repository:
 
 ```powershell
-npm ci
-npm run build:install
+pnpm install --frozen-lockfile
+pnpm run build:install
 ```
 
-For pnpm, run `pnpm install --frozen-lockfile` followed by `pnpm run build` (host and browser) or `pnpm run build:install` (the full add-in). The checked-in pnpm workspace configuration allows the required esbuild and ZeroMQ install scripts and skips optional dependency scripts.
+Use `pnpm run build` to build only the host and browser. The checked-in pnpm workspace configuration allows the required esbuild and ZeroMQ install scripts and skips optional dependency scripts.
 
-`build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. Options follow after ` -- ` (npm does not pass dashed flags): `npm run build:install -- open-revit` reopens Revit after installation, `-- build-only` builds and verifies the package without installing, and `-- revit-years 2025,2026` selects versions. When calling Node directly, dashed forms also work: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
+`build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. `pnpm run build:install --open-revit` reopens Revit after installation, `pnpm run build:install --build-only` builds and verifies the package without installing, and `pnpm run build:install --revit-years 2025,2026` selects versions. The same flags work when calling Node directly: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
 
-Close Revit before installation. The installer registers a per-user add-in and copies a versioned package under `%LOCALAPPDATA%\Revcode\packages`. It does not require administrator privileges. Revit may show its standard unsigned add-in prompt on first load.
+Close Revit before activation. The installer registers compatible detected installations and copies a verified payload under `%LOCALAPPDATA%\Revcode\packages`. It does not require administrator privileges. Unsigned local builds may show Revit's standard add-in prompt. Use the [deployment guide](docs/DEPLOYMENT.md) for deferred activation, diagnostics, rollback, and complete removal.
 
 The individual steps behind `build:install` are also available separately:
 
@@ -187,11 +187,11 @@ See [desktop protocol and limits](docs/DESKTOP-PROTOCOL.md) for the desktop inte
 ## Development and limits
 
 ```powershell
-npm run build       # Host + browser
-npm run check       # Typecheck, host tests, production build
+pnpm run build       # Host + browser
+pnpm run check       # Typecheck, host tests, production build
 node scripts/smoke-host-lifecycle.mjs # After build: host stop/restart smoke test
-npm run build:install -- build-only   # Stage and verify a package without installing
-npm run build:install -- open-revit   # Build, install, and reopen Revit
+pnpm run build:install --build-only   # Stage and verify a package without installing
+pnpm run build:install --open-revit   # Build, install, and reopen Revit
 ```
 
 Native add-in changes require closing Revit and reinstalling. C# snippets compile on each call and require no restart. Browser assets and Node dependencies are served from the installed versioned package, so rebuilding the repository alone does not update an installed package.

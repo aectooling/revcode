@@ -1,16 +1,20 @@
 <Project>
   <PropertyGroup>
     <RevitYear Condition="'$(RevitYear)' == ''">2026</RevitYear>
-    <TargetFramework Condition="'$(TargetFramework)' == '' and '$(RevitYear)' != '2027'">net8.0-windows</TargetFramework>
-    <TargetFramework Condition="'$(TargetFramework)' == '' and '$(RevitYear)' == '2027'">net10.0-windows</TargetFramework>
+    <RevitRuntime Condition="'$(RevitRuntime)' == '' and '$(RevitYear)' == '2025'">8</RevitRuntime>
+    <RevitRuntime Condition="'$(RevitRuntime)' == ''">10</RevitRuntime>
+    <TargetFramework Condition="'$(TargetFramework)' == ''">net$(RevitRuntime).0-windows</TargetFramework>
     <RevitInstallDir Condition="'$(RevitInstallDir)' == ''">C:\Program Files\Autodesk\Revit $(RevitYear)</RevitInstallDir>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>12</LangVersion>
     <PlatformTarget>x64</PlatformTarget>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <BaseIntermediateOutputPath>obj/$(RevitYear)/</BaseIntermediateOutputPath>
-    <BaseOutputPath>bin/$(RevitYear)/</BaseOutputPath>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.net$(RevitRuntime).lock.json</NuGetLockFilePath>
+    <BaseIntermediateOutputPath>obj/$(RevitYear)-net$(RevitRuntime)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/$(RevitYear)-net$(RevitRuntime)/</BaseOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>

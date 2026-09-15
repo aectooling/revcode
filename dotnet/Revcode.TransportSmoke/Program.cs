@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using NetMQ;
 using NetMQ.Sockets;
 
-// Force the same BCL identity already loaded by .NET 8 Revit before constructing NetMQ.
+// Load the host runtime's BCL identity before constructing NetMQ.
 Console.WriteLine(typeof(ImmutableArray<>).Assembly.FullName);
 using var router = new RouterSocket();
 using var dealer = new DealerSocket();
@@ -17,4 +17,4 @@ if (!router.TryReceiveMultipartMessage(TimeSpan.FromSeconds(5), ref incoming) ||
 router.SendMoreFrame(incoming[0].Buffer).SendFrame("ack");
 if (!dealer.TryReceiveFrameString(TimeSpan.FromSeconds(5), out var response) || response != "ack")
     throw new InvalidOperationException("Dealer/Router reply exchange failed.");
-Console.WriteLine("PASS: NetMQ Dealer/Router exchange under .NET 8 with Immutable 8 already loaded.");
+Console.WriteLine($"PASS: NetMQ Dealer/Router exchange under .NET {Environment.Version.Major} with the host Immutable assembly already loaded.");

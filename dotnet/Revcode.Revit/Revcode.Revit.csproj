@@ -4,9 +4,9 @@
     <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
     <!-- The newer NetMQ netstandard build requires Immutable 10, which conflicts with Revit's loaded BCL.
          This version has a native net8 target. Patch its WCF transitive XML dependency explicitly. -->
-    <PackageReference Include="NetMQ" Version="4.0.2.2" Condition="'$(RevitYear)' != '2027'" />
-    <PackageReference Include="NetMQ" Version="4.0.4.3" Condition="'$(RevitYear)' == '2027'" />
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.4" Condition="'$(RevitYear)' != '2027'" />
+    <PackageReference Include="NetMQ" Version="4.0.2.2" Condition="'$(RevitRuntime)' == '8'" />
+    <PackageReference Include="NetMQ" Version="4.0.4.3" Condition="'$(RevitRuntime)' == '10'" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.4" Condition="'$(RevitRuntime)' == '8'" />
     <ProjectReference Include="../Revcode.Contracts/Revcode.Contracts.csproj" />
     <Reference Include="RevitAPI"><HintPath>$(RevitInstallDir)/RevitAPI.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="RevitAPIUI"><HintPath>$(RevitInstallDir)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>

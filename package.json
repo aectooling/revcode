@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "vitest run",
     "test:native": "dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release",
-    "test:transport": "dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release",
+    "test:transport": "dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=8 -p:RestoreLockedMode=true && dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=10 -p:RestoreLockedMode=true",
     "test:browser": "node web/tests/browser-smoke.mjs",
     "test:highlighting": "node web/tests/highlighting-smoke.mjs",
     "test:skills-runs": "node web/tests/skills-runs-smoke.mjs",
@@ -24,7 +24,18 @@
     "dev": "vite --config web/vite.config.ts",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1",
     "build:install": "node scripts/build-install.mjs",
-    "install:revit": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1"
+    "install:revit": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1",
+    "version:patch": "node scripts/release.mjs version patch",
+    "version:minor": "node scripts/release.mjs version minor",
+    "version:major": "node scripts/release.mjs version major",
+    "release:patch": "node scripts/release.mjs release patch",
+    "release:minor": "node scripts/release.mjs release minor",
+    "release:major": "node scripts/release.mjs release major",
+    "release:check": "node scripts/release.mjs check",
+    "release:build": "node scripts/release.mjs build",
+    "release:publish": "node scripts/release.mjs publish",
+    "release:resume": "node scripts/release.mjs resume",
+    "test:deployment": "node --test scripts/deployment/*.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
