@@ -23,6 +23,7 @@ jobs:
             10.0.x
       - run: npm ci
       - run: npm run check
+      - run: node scripts/smoke-host-lifecycle.mjs
       - run: dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release
       - run: dotnet build dotnet/Revcode.Desktop/Revcode.Desktop.csproj -c Release
       - run: node --check scripts/desktop-spike.mjs

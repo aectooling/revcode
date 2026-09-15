@@ -6,6 +6,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2"><PrivateAssets>all</PrivateAssets></PackageReference>
     <ProjectReference Include="../Revcode.Compiler/Revcode.Compiler.csproj" />
     <Compile Include="../Revcode.Revit/SessionIdentityRegistry.cs" Link="SessionIdentityRegistry.cs" />
+    <Compile Include="../Revcode.Revit/HostLifecycle.cs" Link="HostLifecycle.cs" />
     <Compile Include="../Revcode.Revit/BatchExecutor.cs" Link="BatchExecutor.cs" />
     <Compile Include="../Revcode.Desktop/Protocol.cs" Link="DesktopProtocol.cs" />
     <Compile Include="../Revcode.Desktop/Win32.cs" Link="DesktopWin32.cs" />
