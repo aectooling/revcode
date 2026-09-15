@@ -26,11 +26,9 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
     private readonly SessionIdentityRegistry<Document> documents = new(document => document.IsValidObject);
     private readonly ConcurrentDictionary<string, Operation> operations = new();
     private readonly ConcurrentQueue<Operation> ready = new();
-    private readonly object startupLock = new();
+    private readonly HostLifecycle host = new();
     private ContextSnapshot snapshot;
-    private Task? startupTask;
     private Discovery? discovery;
-    private string? startupError;
     private DateTime lastCapture = DateTime.MinValue;
     private int active;
     private volatile bool fenced;
@@ -55,26 +53,26 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
 
     public void OpenBrowser()
     {
-        lock (startupLock)
-        {
-            if (discovery is { } found) { LaunchBrowser(found); return; }
-            if (startupTask is null || startupTask.IsCompleted)
-                startupTask = Task.Run(async () =>
-                {
-                    try { await StartAsync(); }
-                    catch (Exception ex) when (!shutdown.IsCancellationRequested) { discovery = null; startupError = ex.Message; }
-                });
-        }
+        host.Open(StartAsync, () => { if (discovery is { } found) LaunchBrowser(found); });
+    }
+
+    public string Status => host.Status + "\n\n" +
+        (fenced ? "Execution is blocked after an unresolved transaction. Inspect the model and restart Revit."
+            : Volatile.Read(ref active) != 0 ? "A native request is still settling." : "No active native request.") +
+        "\n\nThis status applies to this Revit instance only.";
+
+    public void Stop(bool restart = false)
+    {
+        host.Stop(restart);
+        foreach (var operation in operations.Values) operation.Cancellation.Cancel();
+        while (ready.TryDequeue(out var operation)) Finish(operation, "cancelled", "Revcode was stopped before execution.");
     }
 
     public void OnIdling(UIApplication app)
     {
         if (disposed) return;
-        if (startupError is { } error)
-        {
-            startupError = null;
-            TaskDialog.Show("Revcode", "Revcode could not start: " + error);
-        }
+        if (host.Poll(Volatile.Read(ref active) == 0, out var error)) OpenBrowser();
+        if (error != null) TaskDialog.Show("Revcode", "Revcode stopped: " + error);
         if ((DateTime.UtcNow - lastCapture).TotalSeconds >= 1)
         {
             try { Volatile.Write(ref snapshot, Capture(app)); lastCapture = DateTime.UtcNow; }
@@ -104,8 +102,9 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         return new(instanceId, app.Application.VersionNumber, app.Application.VersionBuild, RuntimeInformation.FrameworkDescription, doc, openDocuments, DateTimeOffset.UtcNow.ToString("O"));
     }
 
-    private async Task StartAsync()
+    private async Task StartAsync(CancellationToken cancellation)
     {
+        cancellation.ThrowIfCancellationRequested();
         var userDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Revcode", "user");
         var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Revcode", "instances", instanceId);
         MakePrivateDirectory(userDir);
@@ -120,12 +119,14 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             WindowStyle = ProcessWindowStyle.Hidden,
             WorkingDirectory = root,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            RedirectStandardInput = true
         };
         using var parent = Process.GetCurrentProcess();
         foreach (var arg in new[] { ResolvePath(runtime.HostPath), "--instance", instanceId, "--parent-pid", Environment.ProcessId.ToString(),
             "--parent-start-ticks", parent.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "--desktop-path", ResolvePath(runtime.DesktopPath), "--discovery", discoveryPath, "--data-dir", dataDir, "--user-dir", userDir }) start.ArgumentList.Add(arg);
+            "--desktop-path", ResolvePath(runtime.DesktopPath), "--discovery", discoveryPath, "--data-dir", dataDir, "--user-dir", userDir,
+            "--shutdown-stdin" }) start.ArgumentList.Add(arg);
         start.Environment["REVCODE_NATIVE_TOKEN"] = nativeToken;
         using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not launch bundled Node.");
         try
@@ -144,39 +145,50 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             Discovery? found = null;
             while (timeout.Elapsed < TimeSpan.FromSeconds(30))
             {
-                shutdown.Token.ThrowIfCancellationRequested();
+                cancellation.ThrowIfCancellationRequested();
                 if (child.HasExited) throw new InvalidOperationException($"Revcode host exited ({child.ExitCode}). See host logs in {dataDir}.");
                 if (File.Exists(discoveryPath))
                 {
-                    try { found = JsonSerializer.Deserialize<Discovery>(await File.ReadAllTextAsync(discoveryPath, shutdown.Token), Json); }
+                    try { found = JsonSerializer.Deserialize<Discovery>(await File.ReadAllTextAsync(discoveryPath, cancellation), Json); }
                     catch (JsonException) { }
                     if (found != null) break;
                 }
-                await Task.Delay(150, shutdown.Token);
+                await Task.Delay(150, cancellation);
             }
             if (found is null || found.ProtocolVersion != 1 || found.InstanceId != instanceId
                 || !Uri.TryCreate(found.Url, UriKind.Absolute, out var uri) || uri.Scheme != "http" || uri.Host != "127.0.0.1" || !string.IsNullOrEmpty(uri.UserInfo))
                 throw new InvalidOperationException("Host readiness timed out or returned invalid discovery data.");
             if (!Uri.TryCreate(found.NativeEndpoint, UriKind.Absolute, out var nativeUri) || nativeUri.Scheme != "tcp" || nativeUri.Host != "127.0.0.1" || nativeUri.Port <= 0)
                 throw new InvalidOperationException("Invalid native ZeroMQ endpoint.");
-            discovery = found;
-            if (Environment.GetEnvironmentVariable("REVCODE_NO_BROWSER") != "1") LaunchBrowser(found);
+            host.Ready(cancellation, () =>
+            {
+                discovery = found;
+                if (Environment.GetEnvironmentVariable("REVCODE_NO_BROWSER") != "1") LaunchBrowser(found);
+            });
             // A dedicated worker owns the Dealer socket. It keeps polling while compiler / API callbacks execute.
             foreach (var operation in operations.Values) operation.AcknowledgedStatus = null;
-            await Task.Factory.StartNew(() => TransportLoop(found.NativeEndpoint, nativeToken, child), shutdown.Token,
+            await Task.Factory.StartNew(() => TransportLoop(found.NativeEndpoint, nativeToken, child, cancellation), cancellation,
                 TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
         finally
         {
+            discovery = null;
             // Own only the exact Node Process created above. A failed startup/retry must not leave
             // competing hosts writing the same journal. This continuation runs off Revit's UI thread.
             try
             {
-                using var grace = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                child.StandardInput.Close();
+                using var grace = new CancellationTokenSource(TimeSpan.FromSeconds(3));
                 try { await child.WaitForExitAsync(grace.Token); }
-                catch (OperationCanceledException) { if (!child.HasExited) child.Kill(); }
+                catch (OperationCanceledException) { if (!child.HasExited) child.Kill(entireProcessTree: true); }
+                await child.WaitForExitAsync();
             }
-            catch { /* Cleanup must never mask the actual startup/transport exception. */ }
+            catch
+            {
+                // If termination fails, keep this generation alive until the owned process exits.
+                // Never start a competing host against the same journal.
+                await child.WaitForExitAsync();
+            }
         }
     }
 
@@ -190,13 +202,13 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
         directory.SetAccessControl(acl);
     }
 
-    private void TransportLoop(string endpoint, string token, Process host)
+    private void TransportLoop(string endpoint, string token, Process host, CancellationToken cancellation)
     {
         using var socket = new DealerSocket();
         socket.Options.Linger = TimeSpan.Zero;
         socket.Connect(endpoint);
         var heartbeat = DateTime.MinValue;
-        while (!shutdown.IsCancellationRequested)
+        while (!cancellation.IsCancellationRequested)
         {
             if (host.HasExited) throw new InvalidOperationException("Revcode host stopped. Click Open Revcode to reconnect; previous operations will not be replayed.");
             try
@@ -224,14 +236,14 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
                 }
                 if (type != "command") continue;
                 var command = message.RootElement.GetProperty("command").Deserialize<NativeCommand>(Json);
-                if (command != null) AcceptCommand(command);
+                if (command != null && !cancellation.IsCancellationRequested) AcceptCommand(command, cancellation);
             }
-            catch (Exception) when (!shutdown.IsCancellationRequested) { Thread.Sleep(100); }
+            catch (Exception) when (!cancellation.IsCancellationRequested) { Thread.Sleep(100); }
         }
         socket.TrySendFrame(TimeSpan.FromMilliseconds(100), JsonSerializer.Serialize(new { type = "disconnect", token }, Json));
     }
 
-    private void AcceptCommand(NativeCommand command)
+    private void AcceptCommand(NativeCommand command, CancellationToken cancellation)
     {
         if (string.IsNullOrWhiteSpace(command.OperationId)) return;
         if (command.Kind == "cancel") { if (operations.TryGetValue(command.OperationId, out var op)) op.Cancellation.Cancel(); return; }
@@ -245,7 +257,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
             Finish(rejected, "failed", "Native operation capacity reached; restart Revit.", release: false);
             return;
         }
-        var operation = new Operation(command);
+        var operation = new Operation(command, cancellation);
         if (!operations.TryAdd(command.OperationId, operation)) return;
         if (fenced) { Finish(operation, "unknown", "Execution is fenced after an unresolved transaction. Restart Revit after inspecting the model."); return; }
         if (Interlocked.CompareExchange(ref active, 1, 0) != 0) { Finish(operation, "failed", "Another native operation is still active.", release: false); return; }
@@ -283,7 +295,7 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
                 operation.Verify = operation.Command.Verify is null ? null : compiled[^1];
             }
             else { operation.Assembly = compiled[0].Assembly; operation.Pdb = compiled[0].Pdb; }
-            operation.Cancellation.Token.ThrowIfCancellationRequested();
+            linked.Token.ThrowIfCancellationRequested();
             Volatile.Write(ref operation.Update, new(operation.Command.OperationId, "queued", Diagnostics: operation.Diagnostics));
             ready.Enqueue(operation);
             // Raise is Revit's thread-safe modeless scheduling entry point; no document API is touched here.
@@ -389,16 +401,17 @@ internal sealed class NativeService : IExternalEventHandler, IDisposable
     public void Dispose()
     {
         disposed = true;
+        host.Dispose();
         shutdown.Cancel();
         foreach (var operation in operations.Values) operation.Cancellation.Cancel();
         // Do not wait for HTTP or compiler work on Revit's shutdown thread. Node monitors the parent PID.
         externalEvent.Dispose();
     }
 
-    private sealed class Operation(NativeCommand command)
+    private sealed class Operation(NativeCommand command, CancellationToken cancellation = default)
     {
         public NativeCommand Command { get; } = command;
-        public CancellationTokenSource Cancellation { get; } = new();
+        public CancellationTokenSource Cancellation { get; } = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         public Stopwatch Timer { get; } = Stopwatch.StartNew();
         public OperationUpdate Update = new(command.OperationId, "compiling");
         public string? AcknowledgedStatus;

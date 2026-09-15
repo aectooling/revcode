@@ -60,6 +60,10 @@ Custom OpenAI-compatible endpoints can be added with a provider ID, API base URL
 
 Browser refresh restores the current transcript and results. The tab can be closed while work continues. Reopen it using the ribbon button. Multiple Revit processes get independent hosts/tabs in this prototype. A switched or closed document cannot silently redirect an already-submitted edit.
 
+The blue **r/** ribbon icon matches the browser favicon. Its main click always opens Revcode. Use the small dropdown arrow for **Restart Revcode**, **Stop Revcode**, or **Check status**, including when no document is open. Restart and Stop show a brief Revit dialog; Check status reports Starting, Running, Stopping, Restarting, Stopped, or a failure message for this Revit instance.
+
+Stop cancels pending native work and shuts down the local host. Restart waits for the old host and native work to settle, then opens a fresh browser tab; the previous tab can be closed. Neither action undoes completed model edits. Restart preserves native operation identities and any execution block caused by an unresolved transaction; such a block still requires inspecting the model and restarting Revit.
+
 ## C# contract
 
 Enter the body of `object? Execute(RevcodeContext ctx)`, without a class wrapper:
@@ -185,6 +189,7 @@ See [PROTOCOL.md](PROTOCOL.md) for the implemented wire boundary, [PLAN.md](PLAN
 ```powershell
 npm run build       # Host + browser
 npm run check       # Typecheck, host tests, production build
+node scripts/smoke-host-lifecycle.mjs # After build: host stop/restart smoke test
 npm run build:install -- build-only   # Stage and verify a package without installing
 npm run build:install -- open-revit   # Build, install, and reopen Revit
 ```

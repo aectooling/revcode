@@ -7,7 +7,7 @@ import { createHost } from './server.js';
 import { createPiAgent } from './pi-agent.js';
 import { DesktopClient } from './desktop-client.js';
 
-const { values } = parseArgs({ options: { instance: { type: 'string' }, 'parent-pid': { type: 'string' }, 'parent-start-ticks': { type: 'string' }, 'desktop-path': { type: 'string' }, discovery: { type: 'string' }, 'data-dir': { type: 'string' }, 'user-dir': { type: 'string' } } });
+const { values } = parseArgs({ options: { instance: { type: 'string' }, 'parent-pid': { type: 'string' }, 'parent-start-ticks': { type: 'string' }, 'desktop-path': { type: 'string' }, discovery: { type: 'string' }, 'data-dir': { type: 'string' }, 'user-dir': { type: 'string' }, 'shutdown-stdin': { type: 'boolean' } } });
 const nativeToken = process.env.REVCODE_NATIVE_TOKEN;
 delete process.env.REVCODE_NATIVE_TOKEN;
 if (!values.instance || !values.discovery || !values['data-dir'] || !nativeToken) throw new Error('Required: --instance --discovery --data-dir and REVCODE_NATIVE_TOKEN.');
@@ -24,8 +24,21 @@ await mkdir(dirname(discovery), { recursive: true, mode: 0o700 });
 await writeFile(`${discovery}.tmp`, JSON.stringify({ protocolVersion: 1, instanceId: values.instance, url: host.url, nativeEndpoint: host.nativeEndpoint, browserToken: host.browserToken }), { mode: 0o600 });
 await rename(`${discovery}.tmp`, discovery);
 let exiting = false;
-async function shutdown() { if (exiting) return; exiting = true; clearInterval(parentWatch); await host.close(); await rm(discovery, { force: true }); }
+async function shutdown() {
+  if (exiting) return;
+  exiting = true;
+  clearInterval(parentWatch);
+  if (values['shutdown-stdin']) process.stdin.destroy();
+  await host.close();
+  await rm(discovery, { force: true });
+}
 const parentPid = Number(values['parent-pid']);
 const parentWatch = setInterval(() => { if (parentPid > 0) { try { process.kill(parentPid, 0); } catch { void shutdown(); } } }, 2000);
 process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());
+// Revit closes its private stdin pipe to request graceful shutdown on Windows.
+// Opt in so command-line and smoke hosts keep their existing stdin behavior.
+if (values['shutdown-stdin']) {
+  process.stdin.once('end', () => void shutdown());
+  process.stdin.resume();
+}
