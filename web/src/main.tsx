@@ -10,12 +10,30 @@ import {
   type Mode,
 } from "./components/console-panel";
 import { Conversation } from "./components/conversation";
-import { ExecutionHistory, type Operation } from "./components/execution-history";
+import {
+  ExecutionHistory,
+  type Operation,
+  type RunSummary,
+  type RunDetail,
+} from "./components/execution-history";
 import { ModelControls } from "./components/model-picker";
 import { ProviderDialog } from "./provider-dialog";
-import type { AuthState, Context, Message, ProviderSummary, Settings } from "../../src/host/types";
+import type {
+  AuthState,
+  Context,
+  Message,
+  ProviderSummary,
+  Settings,
+} from "../../src/host/types";
+import { SkillsDialog } from "./components/skills-dialog";
+import type { SkillSummary } from "../../src/host/skills";
+import { useConsoleDraft } from "./lib/use-console-draft";
 import { Sidebar } from "./components/sidebar";
-import { ToastRegion, type ToastLevel, type ToastNotice } from "./components/toasts";
+import {
+  ToastRegion,
+  type ToastLevel,
+  type ToastNotice,
+} from "./components/toasts";
 import { Badge } from "./components/ui/badge";
 import {
   Dialog,
@@ -28,13 +46,14 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
 import mark from "./assets/revcode-mark.svg";
 import { Loader2, TriangleAlert } from "lucide-react";
-import { DesktopPanel } from './components/desktop-panel';
-import type { DesktopState } from '../../src/host/desktop-types';
-
+import { DesktopPanel } from "./components/desktop-panel";
+import type { DesktopState } from "../../src/host/desktop-types";
 type HostState = {
   instanceId: string;
   connected: boolean;
   busy: boolean;
+  chatBusy?: boolean;
+  runs?: RunSummary[];
   context: Context | null;
   messages: Message[];
   operations: Operation[];
@@ -65,11 +84,24 @@ function readToken() {
     return "";
   }
 }
+
 let token = readToken();
+async function loadHistoryImage(artifact: string) {
+  const response = await fetch(
+    `/api/history/image/${encodeURIComponent(artifact)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok)
+    throw new Error("Recorded image is unavailable or expired.");
+  return response.blob();
+}
 
 async function loadDesktopImage(artifact: string, signal: AbortSignal) {
-  const response = await fetch(`/api/desktop/image/${encodeURIComponent(artifact)}`, { headers: { Authorization: `Bearer ${token}` }, signal });
-  if (!response.ok) throw new Error('Screenshot unavailable.');
+  const response = await fetch(
+    `/api/desktop/image/${encodeURIComponent(artifact)}`,
+    { headers: { Authorization: `Bearer ${token}` }, signal },
+  );
+  if (!response.ok) throw new Error("Screenshot unavailable.");
   return response.blob();
 }
 
@@ -100,7 +132,6 @@ async function api<T>(
 }
 
 const SIDEBAR_KEY = "revcode.sidebar.collapsed";
-
 function readCollapsed() {
   try {
     return window.localStorage.getItem(SIDEBAR_KEY) === "1";
@@ -120,19 +151,38 @@ function StatusPill({
 }) {
   if (!hostOnline)
     return (
-      <Badge variant="neutral" dot pulse className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+      <Badge
+        variant="neutral"
+        dot
+        pulse
+        className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal"
+      >
         <span className="text-ink">Offline</span>
       </Badge>
     );
   if (!revitConnected)
     return (
-      <Badge variant="warn" dot pulse className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
+      <Badge
+        variant="warn"
+        dot
+        pulse
+        className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal"
+      >
         <span className="text-ink">Connecting</span>
       </Badge>
     );
   return (
-    <Badge variant="accent" dot={!busy} className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal">
-      {busy && <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />}
+    <Badge
+      variant="accent"
+      dot={!busy}
+      className="h-7 gap-2 border-0 bg-transparent p-0 text-xs font-normal"
+    >
+      {busy && (
+        <Loader2
+          aria-hidden="true"
+          className="size-3.5 shrink-0 animate-spin"
+        />
+      )}
       <span className="text-ink">{busy ? "Working" : "Ready"}</span>
     </Badge>
   );
@@ -144,7 +194,19 @@ function App() {
   const [hostOnline, setHostOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [steps, setSteps] = useState([{ name: "Step 1", code: "return null;" }]);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [previewSkillId, setPreviewSkillId] = useState("");
+  const [selectedSkills, setSelectedSkills] = useState<SkillSummary[]>([]);
+  const [authoringDraft, setAuthoringDraft] = useState<{
+    sourceRunId?: string;
+    destinationSkillId?: string;
+  }>();
+  const [selectedRun, setSelectedRun] = useState("");
+  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
+  const [jumpMessageId, setJumpMessageId] = useState("");
+  const [steps, setSteps] = useState([
+    { name: "Step 1", code: "return null;" },
+  ]);
   const [verify, setVerify] = useState("");
   const [code, setCode] = useState(examples[0].code);
   const [mode, setMode] = useState<Mode>("query");
@@ -158,7 +220,9 @@ function App() {
   const toastId = useRef(0);
   const composer = useRef<ComposerHandle>(null);
   const submitting = useRef(false);
-
+  const chatRequest = useRef<{ key: string; id: string } | undefined>(
+    undefined,
+  );
   const toast = useCallback((message: string, level: ToastLevel = "error") => {
     const id = ++toastId.current;
     setNotices((current) => [
@@ -169,7 +233,6 @@ function App() {
   const dismissToast = useCallback((id: number) => {
     setNotices((current) => current.filter((notice) => notice.id !== id));
   }, []);
-
   useEffect(() => {
     try {
       window.localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
@@ -177,7 +240,6 @@ function App() {
       // Storage may be unavailable; the preference is only a convenience.
     }
   }, [sidebarCollapsed]);
-
   useEffect(() => {
     const reconnect = () => {
       if (!window.location.hash) return;
@@ -187,7 +249,6 @@ function App() {
     window.addEventListener("hashchange", reconnect);
     return () => window.removeEventListener("hashchange", reconnect);
   }, []);
-
   useEffect(() => {
     if (!activeToken) return;
     let disposed = false;
@@ -195,7 +256,11 @@ function App() {
     const controller = new AbortController();
     const poll = async () => {
       try {
-        const next = await api<HostState>("/api/state", undefined, controller.signal);
+        const next = await api<HostState>(
+          "/api/state",
+          undefined,
+          controller.signal,
+        );
         if (!disposed) {
           setState(next);
           setHostOnline(true);
@@ -221,41 +286,93 @@ function App() {
       controller.abort();
     };
   }, [activeToken]);
-
+  const draftStorage = useConsoleDraft({
+    api,
+    instanceId: state?.instanceId,
+    online: hostOnline,
+    draft: {
+      version: 1,
+      code,
+      mode,
+      steps,
+      verify,
+      documentToken: documentToken || state?.context?.document?.token || "",
+      sessionId: state?.context?.instanceId ?? null,
+    },
+    restore(saved) {
+      setCode(saved.code);
+      setMode(saved.mode);
+      setSteps(saved.steps);
+      setVerify(saved.verify);
+      const sameSession =
+        !!saved.sessionId && saved.sessionId === state?.context?.instanceId;
+      const documents =
+        state?.context?.documents ??
+        (state?.context?.document ? [state.context.document] : []);
+      setDocumentToken(
+        sameSession &&
+          documents.some((document) => document.token === saved.documentToken)
+          ? saved.documentToken
+          : "__reselect__",
+      );
+    },
+  });
   const doc = state?.context?.document ?? null;
   const openDocuments = state?.context?.documents ?? (doc ? [doc] : []);
-  const targetDocument = documentToken ? openDocuments.find(d => d.token === documentToken) : doc;
+  const targetDocument = documentToken
+    ? openDocuments.find((d) => d.token === documentToken)
+    : doc;
   const ready = hostOnline && !!state?.connected;
   const busy = pending || !!state?.busy;
   const unknown = state?.operations.some(
     (operation) => operation.status === "unknown",
   );
   const canExecute = ready && !busy && !unknown;
-  const canRunSnippet = canExecute && (!documentToken || !!targetDocument)
-    && ((mode !== "modify" && mode !== "batch") || (!!targetDocument && !targetDocument.isReadOnly));
+  const authoringRequest = !!authoringDraft || /\b(?:create|make|update|revise|edit)\s+(?:(?:a|an|the|this|that|existing|reusable)\s+){0,3}skill\b/i.test(prompt);
+  const canChat =
+    authoringRequest
+      ? hostOnline && !pending && !(state?.chatBusy ?? state?.busy)
+      : canExecute;
+  const canRunSnippet =
+    canExecute &&
+    (!documentToken || !!targetDocument) &&
+    ((mode !== "modify" && mode !== "batch") ||
+      (!!targetDocument && !targetDocument.isReadOnly));
   const operations = [...(state?.operations ?? [])].reverse();
-  const providerName = providerLabel(state?.settings.provider, state?.providers ?? []);
+  const providerName = providerLabel(
+    state?.settings.provider,
+    state?.providers ?? [],
+  );
   const connectionDetail = !hostOnline ? connectionError : "";
-
   function openSettings() {
     setMobileOpen(false);
     setSettingsOpen(true);
   }
-
   async function refreshState() {
     setState(await api<HostState>("/api/state"));
   }
-
   async function submitChat() {
-    if (submitting.current || !canExecute || !state?.settings.configured) return;
+    if (submitting.current || !canChat || !state?.settings.configured) return;
     submitting.current = true;
     setPending(true);
     try {
-      await api("/api/chat", {
-        requestId: crypto.randomUUID(),
+      const payload = {
         text: prompt.trim(),
-      });
+        mode: authoringDraft ? "authoring" : "execution",
+        selectedSkillIds: selectedSkills.map((skill) => skill.id),
+        sourceRunIds: authoringDraft?.sourceRunId ? [authoringDraft.sourceRunId] : [],
+        ...(authoringDraft?.destinationSkillId
+          ? { destinationSkillId: authoringDraft.destinationSkillId }
+          : {}),
+      };
+      const key = JSON.stringify(payload);
+      if (chatRequest.current?.key !== key)
+        chatRequest.current = { key, id: crypto.randomUUID() };
+      await api("/api/chat", { requestId: chatRequest.current.id, ...payload });
+      chatRequest.current = undefined;
       setPrompt("");
+      setAuthoringDraft(undefined);
+      setSelectedSkills([]);
       composer.current?.focus();
       await refreshState();
     } catch (reason) {
@@ -269,7 +386,6 @@ function App() {
       setPending(false);
     }
   }
-
   async function executeSnippet() {
     if (submitting.current || !canRunSnippet) return;
     submitting.current = true;
@@ -277,7 +393,14 @@ function App() {
     try {
       await api("/api/execute", {
         requestId: crypto.randomUUID(),
-        ...(mode === "batch" ? { mode, steps, ...(verify.trim() ? { verify: { code: verify } } : {}), documentToken: targetDocument?.token } : { code, mode, ...(documentToken ? { documentToken } : {}) }),
+        ...(mode === "batch"
+          ? {
+              mode,
+              steps,
+              ...(verify.trim() ? { verify: { code: verify } } : {}),
+              documentToken: targetDocument?.token,
+            }
+          : { code, mode, ...(documentToken ? { documentToken } : {}) }),
         transactionName: "Revcode: C# console",
       });
       await refreshState();
@@ -292,31 +415,92 @@ function App() {
       setPending(false);
     }
   }
-
+  function author(sourceRunId?: string, skill?: SkillSummary) {
+    setAuthoringDraft({
+      sourceRunId,
+      destinationSkillId: skill?.source === "user" ? skill.id : undefined,
+    });
+    setPrompt(
+      skill
+        ? `${skill.source === "user" ? "Update" : "Create a user copy of"} the skill "${skill.name}" with what we learned${sourceRunId ? " from the recent run" : ""}. Preserve unrelated instructions.`
+        : "Create a reusable skill from the recent run. Distinguish verified outcomes from incomplete work and include verification and recovery guidance.",
+    );
+    setSkillsOpen(false);
+    composer.current?.focus();
+  }
+  async function authorRecent(skill?: SkillSummary) {
+    try {
+      if (skill && authoringDraft?.sourceRunId) {
+        author(authoringDraft.sourceRunId, skill);
+        return;
+      }
+      let recent: RunSummary | undefined;
+      let cursor: string | undefined;
+      do {
+        const page = await api<{ runs: RunSummary[]; nextCursor?: string }>(
+          `/api/runs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        recent = page.runs.find((run) => run.intent !== "authoring");
+        cursor = page.nextCursor;
+      } while (!recent && cursor);
+      if (!recent && !skill) {
+        toast(
+          "No usable recorded work yet. Describe the workflow you want to capture.",
+          "info",
+        );
+        return;
+      }
+      author(recent?.id, skill);
+      if (!state?.settings.configured)
+        toast("Connect a provider to create or update skills.", "info");
+    } catch (reason) {
+      toast(String(reason));
+    }
+  }
+  function jumpToRun(detail: RunDetail) {
+    const message = detail.messages.find(
+      (item) => item.id === detail.run.userMessageId,
+    );
+    if (!message) {
+      toast("The associated message is unavailable or expired.", "info");
+      return;
+    }
+    setOlderMessages((current) => [
+      ...current.filter(
+        (item) => !detail.messages.some((next) => next.id === item.id),
+      ),
+      ...detail.messages,
+    ]);
+    setJumpMessageId(message.id);
+  }
   async function cancel() {
     try {
       await api("/api/cancel", {});
     } catch (reason) {
       toast(
-        reason instanceof Error ? reason.message : "Could not request cancellation.",
+        reason instanceof Error
+          ? reason.message
+          : "Could not request cancellation.",
       );
     }
   }
-
   async function selectModel(provider: string, model: string) {
     try {
       await api("/api/settings", { provider, model });
       await refreshState();
     } catch (reason) {
-      toast(reason instanceof Error ? reason.message : "Could not switch models.");
+      toast(
+        reason instanceof Error ? reason.message : "Could not switch models.",
+      );
     }
   }
-
   if (!token)
     return (
       <main className="flex h-dvh flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ink">
         <img src={mark} alt="" className="size-12 rounded-[10px] shadow-card" />
-        <h1 className="text-lg font-semibold tracking-tight">Open Revcode from Revit</h1>
+        <h1 className="text-lg font-semibold tracking-tight">
+          Open Revcode from Revit
+        </h1>
         <p className="max-w-sm text-[13px] leading-relaxed text-ink-soft">
           Click the Revcode ribbon button to connect this browser to your Revit
           session.
@@ -326,19 +510,27 @@ function App() {
         </p>
       </main>
     );
-
   return (
     <TooltipProvider>
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink lg:flex-row">
-        <a className="skip-link" href="#prompt" onClick={(event) => {
-          event.preventDefault();
-          composer.current?.focus();
-        }}>
+        <a
+          className="skip-link"
+          href="#prompt"
+          onClick={(event) => {
+            event.preventDefault();
+            composer.current?.focus();
+          }}
+        >
           Skip to message
         </a>
         <Sidebar
           desktop={state?.desktop}
-          vision={!!state?.providers.find(provider => provider.id === state.settings.provider)?.models.find(model => model.id === state.settings.model)?.supportsImages}
+          vision={
+            !!state?.providers
+              .find((provider) => provider.id === state.settings.provider)
+              ?.models.find((model) => model.id === state.settings.model)
+              ?.supportsImages
+          }
           hostOnline={hostOnline}
           revitConnected={!!state?.connected}
           revitVersion={state?.context?.revitVersion}
@@ -352,6 +544,10 @@ function App() {
           mobileOpen={mobileOpen}
           onMobileOpenChange={setMobileOpen}
           onManageProvider={openSettings}
+          onOpenSkills={() => {
+            setMobileOpen(false);
+            setSkillsOpen(true);
+          }}
           onOpenConsole={() => {
             setMobileOpen(false);
             setConsoleOpen(true);
@@ -386,9 +582,24 @@ function App() {
               </span>
             </div>
           )}
-          <DesktopPanel loadImage={loadDesktopImage} state={state?.desktop} online={hostOnline} stop={async () => { await api('/api/desktop/stop', {}); }} />
+          <DesktopPanel
+            loadImage={loadDesktopImage}
+            state={state?.desktop}
+            online={hostOnline}
+            stop={async () => {
+              await api("/api/desktop/stop", {});
+            }}
+          />
           <Conversation
-            messages={state?.messages ?? []}
+            messages={[
+              ...olderMessages.filter(
+                (message) =>
+                  !state?.messages.some((current) => current.id === message.id),
+              ),
+              ...(state?.messages ?? []),
+            ]}
+            onViewTools={setSelectedRun}
+            jumpMessageId={jumpMessageId}
             busy={busy}
             connected={hostOnline}
             configured={!!state?.settings.configured}
@@ -403,7 +614,7 @@ function App() {
             onDraftChange={setPrompt}
             onSubmit={() => void submitChat()}
             disabled={!hostOnline}
-            submitDisabled={!canExecute || !state?.settings.configured}
+            submitDisabled={!canChat || !state?.settings.configured}
             alert={
               hostOnline && state && !state.settings.configured ? (
                 <>
@@ -426,9 +637,7 @@ function App() {
                 <ModelControls
                   connected={hostOnline && !!state}
                   providers={state?.providers ?? []}
-                  selected={
-                    state?.settings ?? { provider: "", model: "" }
-                  }
+                  selected={state?.settings ?? { provider: "", model: "" }}
                   onSelectModel={(provider, model) =>
                     void selectModel(provider, model)
                   }
@@ -439,8 +648,37 @@ function App() {
             }
           />
         </main>
-        <ExecutionHistory operations={operations} />
-
+        <ExecutionHistory
+          loadImage={loadHistoryImage}
+          onOpenSkill={(id) => {
+            setPreviewSkillId(id);
+            setSkillsOpen(true);
+          }}
+          operations={operations}
+          api={api}
+          online={hostOnline}
+          activity={JSON.stringify(state?.runs ?? [])}
+          selectedRun={selectedRun}
+          onSelectRun={setSelectedRun}
+          onJump={jumpToRun}
+        />
+        <SkillsDialog
+          initialId={previewSkillId}
+          open={skillsOpen}
+          onClose={() => setSkillsOpen(false)}
+          api={api}
+          online={hostOnline}
+          busy={!!state?.chatBusy}
+          selected={selectedSkills.map((skill) => skill.id)}
+          onSelect={(skill) =>
+            setSelectedSkills((current) =>
+              current.some((item) => item.id === skill.id)
+                ? current
+                : [...current, skill],
+            )
+          }
+          onAuthor={(skill) => void authorRecent(skill)}
+        />
         {consoleOpen && (
           <Dialog
             open
@@ -453,7 +691,9 @@ function App() {
               className="w-[min(680px,calc(100%-2rem))] gap-3"
             >
               <DialogHeader>
-                <DialogTitle id="console-title">Run a C# method body</DialogTitle>
+                <DialogTitle id="console-title">
+                  Run a C# method body
+                </DialogTitle>
                 <DialogDescription>
                   The same executor the assistant uses. No model or API key
                   required. Access the target document through{" "}
@@ -463,8 +703,26 @@ function App() {
                   .
                 </DialogDescription>
               </DialogHeader>
+              {draftStorage.status.includes("could not") && (
+                <button
+                  className="text-xs text-accent"
+                  onClick={draftStorage.retrySave}
+                >
+                  Retry draft storage
+                </button>
+              )}
               <ConsolePanel
-                steps={steps} onStepsChange={setSteps} verify={verify} onVerifyChange={setVerify}
+                draftStatus={draftStorage.status}
+                onClearDraft={() => {
+                  setCode("");
+                  setMode("query");
+                  setSteps([{ name: "Step 1", code: "" }]);
+                  setVerify("");
+                }}
+                steps={steps}
+                onStepsChange={setSteps}
+                verify={verify}
+                onVerifyChange={setVerify}
                 code={code}
                 onCodeChange={setCode}
                 mode={mode}
@@ -483,7 +741,6 @@ function App() {
             </DialogContent>
           </Dialog>
         )}
-
         {settingsOpen && state && (
           <ProviderDialog
             providers={state.providers}

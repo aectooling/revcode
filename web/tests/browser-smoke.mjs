@@ -245,6 +245,8 @@ try {
   await page.getByLabel("Execution mode").selectOption("query");
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
   await page.locator("#code").press("Control+Enter");
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.locator("summary").filter({ hasText: /^Manual console$/ }).click();
   await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
   await expect(page.locator(".operation")).toHaveCount(1);
   expect(lastCommand.documentToken).toBe("other-doc");
@@ -259,13 +261,18 @@ try {
     .getByRole("button", { name: "Test rollback", exact: true })
     .click();
   await expect(page.getByLabel("Execution mode")).toHaveValue("modify");
+  // A restored draft requires explicit target selection when session identity is unavailable.
+  await page.getByLabel("Target document").selectOption("other-doc");
   await page.getByRole("button", { name: "Run C#" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.locator("summary").filter({ hasText: /^Manual console$/ }).click();
   await expect(
     page.getByText("Intentional rollback test. No level should remain.", {
       exact: true,
     }),
   ).toBeVisible();
   await expect(page.getByText(/Transaction: RolledBack/)).toBeVisible();
+  await page.locator(".console-button").click();
 
   await page
     .locator("#code")

@@ -1,5 +1,6 @@
 import { Box, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
+import { HighlightedTextarea } from "./highlighted-textarea";
 import { Button } from "./ui/button";
 
 export type Mode = "query" | "modify" | "api" | "batch";
@@ -67,7 +68,7 @@ export function ConsolePanel({
   canRun,
   onRun,
   onCancel,
-  docReadOnly,
+  docReadOnly, draftStatus, onClearDraft,
 }: {
   steps: { name: string; code: string }[];
   onStepsChange(steps: { name: string; code: string }[]): void;
@@ -87,10 +88,13 @@ export function ConsolePanel({
   onRun(): void;
   onCancel(): void;
   docReadOnly: boolean;
+  draftStatus?: string;
+  onClearDraft?(): void;
 }): ReactNode {
   const runDisabled = !canRun || (mode === "batch" ? steps.some(s => !s.name.trim() || !s.code.trim()) : !code.trim()) || ((mode === "modify" || mode === "batch") && docReadOnly);
   return (
     <section aria-label="C# console" className="grid gap-1.5">
+      <div className="flex items-center gap-2 text-xs"><span role="status">{draftStatus}</span>{onClearDraft && <Button size="sm" variant="ghost" onClick={onClearDraft}>Clear draft</Button>}</div>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Snippet examples">
         {examples.map((example) => (
           <Button
@@ -116,26 +120,21 @@ export function ConsolePanel({
           <legend>Step {index + 1}</legend>
           <input aria-label={`Step ${index + 1} name`} value={step.name} maxLength={100} className="bg-surface p-2"
             onChange={e => onStepsChange(steps.map((s, i) => i === index ? { ...s, name: e.target.value } : s))} />
-          <textarea aria-label={`Step ${index + 1} C#`} value={step.code} className="min-h-24 bg-surface p-2 font-mono text-xs"
+          <HighlightedTextarea onSubmit={() => { if (!runDisabled) onRun(); }} aria-label={`Step ${index + 1} C#`} value={step.code} className="min-h-24 bg-surface p-2 font-mono text-xs"
             onChange={e => onStepsChange(steps.map((s, i) => i === index ? { ...s, code: e.target.value } : s))} />
           <Button variant="secondary" disabled={steps.length === 1} onClick={() => onStepsChange(steps.filter((_, i) => i !== index))}>Remove step</Button>
         </fieldset>)}
         <Button variant="secondary" disabled={steps.length >= 20} onClick={() => onStepsChange([...steps, { name: `Step ${steps.length + 1}`, code: "return null;" }])}>Add step</Button>
         <label className="grid gap-1 text-xs">Optional verification C#
-          <textarea aria-label="Batch verification" value={verify} onChange={e => onVerifyChange(e.target.value)} placeholder="return true;" className="min-h-20 bg-surface p-2 font-mono" />
+          <HighlightedTextarea onSubmit={() => { if (!runDisabled) onRun(); }} aria-label="Batch verification" value={verify} onChange={e => onVerifyChange(e.target.value)} placeholder="return true;" className="min-h-20 bg-surface p-2 font-mono" />
         </label>
-      </div> : <textarea
+      </div> : <HighlightedTextarea
         id="code"
         aria-label="C# method body"
         spellCheck={false}
         value={code}
         onChange={(event) => onCodeChange(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-            event.preventDefault();
-            if (!runDisabled) onRun();
-          }
-        }}
+        onSubmit={() => { if (!runDisabled) onRun(); }}
         className="min-h-[220px] w-full resize-y rounded-md border border-line bg-surface p-3 font-mono text-[13px] leading-relaxed outline-none transition-colors hover:border-line-strong focus-visible:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/15"
       />}
       <div className="flex flex-wrap items-center justify-between gap-2">
