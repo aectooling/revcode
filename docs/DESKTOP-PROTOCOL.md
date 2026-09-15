@@ -63,12 +63,12 @@ Host desktop requests are mutually exclusive with API dispatch. API-pending and 
 
 `desktop/journal.json` stores up to 1000 action intents and receipts per host instance. Intent is persisted before dispatch; same-ID retries return the existing receipt, changed payloads are rejected, and unknown intents survive host restart as a fence. The helper receives a host-generated operation ID, not a model-selected PID or generation. Only the latest PNG is retained under `desktop/`; a new capture deletes its predecessor, and restart removes stale images. Prior-turn images do not authorize actions; the agent must capture again. New Pi sessions are in-memory, so full image tool results are not also appended to session files. Existing session logs from earlier versions are not deleted. Desktop evidence includes the cached native context and its acquisition time/age; native heartbeats do not prove that cache is fresh while Idling is blocked. Document switching is unsupported during a desktop workflow, and the token guard is best effort rather than an atomic active-document boundary.
 
-For the installed workflow use `npm run build:install`, reopen Revit and chat with an image-capable model. The standalone driver's exact-image-match staging described below applies only to manual tests; the agent chooses targets directly from fresh tool images.
+For the installed workflow use `pnpm run build:install`, reopen Revit and chat with an image-capable model. The standalone driver's exact-image-match staging described below applies only to manual tests; the agent chooses targets directly from fresh tool images.
 
 Build a self-contained helper independently of Revit's runtime:
 
 ```powershell
-npm run build:host
+pnpm run build:host
 dotnet publish dotnet/Revcode.Desktop/Revcode.Desktop.csproj -c Release -r win-x64 --self-contained true -o artifacts/desktop-spike
 node scripts/desktop-spike.mjs artifacts/desktop-spike/Revcode.Desktop.exe <Revit-PID> artifacts/desktop-evidence --enable-input
 ```
