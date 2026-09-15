@@ -1,6 +1,6 @@
 # Deployment and releases with pnpm
 
-Status: implemented commands; public release remains gated on signing, all API references, exact-artifact live acceptance, and maintainer account setup. Windows x64 only; no MSI. The repository package stays private. Only the generated distribution package is publishable.
+Status: implemented commands; the initial release is configured as unsigned. Public release remains gated on all API references, exact-artifact live acceptance, and maintainer account setup. Windows x64 only; no MSI. The repository package stays private. Only the generated distribution package is publishable.
 
 ## Compatibility
 
@@ -52,7 +52,7 @@ The helper runs a temporary copy of bundled Node so its original executable can 
 - Revit references for every target, including `RevitAPI.dll`, `RevitAPIUI.dll`, and `RevitAPI.runtimeconfig.json` from the same update.
 - .NET 8 Windows Desktop runtime for transport checks; compatible licensed Revit installations for live tests.
 - Git, authenticated GitHub CLI, and npm publishing rights. Package registry and GitHub repository are explicit in configuration.
-- Windows SDK SignTool and a signing certificate with private-key access in the current-user certificate store.
+- For signed releases only: Windows SDK SignTool and a signing certificate with private-key access in the current-user certificate store.
 
 Reference overrides use these environment variables (paths can contain spaces):
 
@@ -61,14 +61,18 @@ $env:REVCODE_REVIT_2025_NET8_DIR = 'C:\references\2025-net8'
 $env:REVCODE_REVIT_2025_NET10_DIR = 'C:\references\2025-net10'
 $env:REVCODE_REVIT_2026_NET10_DIR = 'C:\references\2026.5'
 $env:REVCODE_REVIT_2027_NET10_DIR = 'C:\references\2027'
+
+# Only required when release.config.json has "signing": "signed":
 $env:REVCODE_SIGNTOOL = 'C:\path\to\signtool.exe'
 $env:REVCODE_CERT_SHA1 = '<certificate thumbprint>'
 $env:REVCODE_TIMESTAMP_URL = '<publisher-approved timestamp service>'
 ```
 
-Default references come from `C:\Program Files\Autodesk\Revit <year>`. Local packaging builds the available matching variants for requested years. Public releases require all configured variants. Our `Revcode.*.dll` and `Revcode.*.exe` files are signed and verified before hashing/packing; third-party binaries retain their original signatures.
+Default references come from `C:\Program Files\Autodesk\Revit <year>`. Local packaging builds the available matching variants for requested years. Public releases require all configured variants.
 
-Confirm the public npm name before the first release. Existing names require the authenticated user to be listed as an owner. For an unclaimed name, explicitly set `firstReleaseNpmUser` in `release.config.json` after checking the intended account/name; preflight permits that account only while the registry reports the name absent. This cannot reserve the name against another publisher.
+`release.config.json` explicitly sets `"signing": "unsigned"` for the initial release, so no certificate or signing environment variables are needed. Build receipts and generated release notes record that status. To enable signing later, set `"signing": "signed"` and configure the signing variables above. Omitting the setting defaults to signed; invalid values fail. Publication requires the artifact's signing status to match the configuration. Signed releases sign and verify our `Revcode.*.dll` and `Revcode.*.exe` files before hashing/packing; third-party binaries retain their original signatures.
+
+Confirm the public npm name before the first release. Existing names require the authenticated user to be listed as an owner. For an unclaimed name, `firstReleaseNpmUser` in `release.config.json` is set to the verified publishing account `aectooling`; preflight permits that account only while the registry reports the name absent. This cannot reserve the name against another publisher.
 
 ## Commands and immutable release sequence
 
@@ -78,14 +82,14 @@ Use pnpm for the documented install, build, test, and release commands. The rele
 |---|---|
 | `pnpm run version:patch`, `pnpm run version:minor`, `pnpm run version:major` | Bump locally; no commit/tag/push/publish |
 | `pnpm run release:check` | Check branch/source, remote state, version/tag availability, tools, references, account ownership, signing configuration |
-| `pnpm run release:build` | Build/test/sign/pack committed source; test the actual tarball |
+| `pnpm run release:build` | Build/test/pack committed source, signing when configured; test the actual tarball |
 | `pnpm run release:patch`, `pnpm run release:minor`, `pnpm run release:major` | Preflight, one bump, version commit, and build; continue publication when acceptance is supplied |
 | `pnpm run release:publish` | Verify the prepared artifact, acceptance and source; push/tag/publish without a bump |
 | `pnpm run release:resume` | Retry unfinished publication using recorded bytes and remote integrity checks |
 
 Version-only commands synchronize npm package and lockfile versions. pnpm lockfile v9 has no root package version, so a version-only bump leaves it unchanged. Native and distribution versions are generated from `package.json`.
 
-Sequence: **preflight → bump → version commit/PR merge → build/sign/pack → exact-tarball tests and live acceptance → annotated tag → draft GitHub release/assets → npm publication → publish GitHub release**.
+Sequence: **preflight → bump → version commit/PR merge → build/optional signing/pack → exact-tarball tests and live acceptance → annotated tag → draft GitHub release/assets → npm publication → publish GitHub release**.
 
 This repository explicitly sets `versionPullRequest: true`: one-command releases create a version PR and pause. This also works on private GitHub plans that do not expose the branch-rules API. After merge, check out the merged release branch and run `pnpm run release:build`. If the setting is omitted, the release command checks GitHub pull-request rules; an explicit `false` selects the direct route. A rejected protected-branch push falls back to a version PR and is never forced. Build and test again from the final merged commit before publication.
 
