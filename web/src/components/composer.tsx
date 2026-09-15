@@ -123,9 +123,6 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           {showStop ? <Square className="size-3 fill-current" /> : <ArrowUp className="size-4" />}
         </Button>
       </form>
-      <p className="mx-auto mt-1.5 w-full max-w-[760px] text-center text-[11px] text-muted">
-        Enter to send · Shift + Enter for a new line
-      </p>
     </footer>
   );
 });

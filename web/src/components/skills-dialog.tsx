@@ -1,3 +1,4 @@
+import { Copy, FolderOpen, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   SkillLibrarySnapshot,
@@ -38,7 +39,6 @@ export function SkillsDialog({
   initialId?: string;
 }) {
   const [library, setLibrary] = useState<SkillLibrarySnapshot>();
-  const [search, setSearch] = useState("");
   const [enabledOnly, setEnabledOnly] = useState(false);
   const [id, setId] = useState("");
   const [previews, setPreviews] = useState<Record<string, SkillPreview>>({});
@@ -126,14 +126,7 @@ export function SkillsDialog({
       id: item.id,
       enabled,
     });
-  const filtered =
-    library?.skills.filter(
-      (item) =>
-        (!enabledOnly || item.enabled) &&
-        `${item.name} ${item.description} ${item.source}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-    ) ?? [];
+  const filtered = library?.skills.filter(item => !enabledOnly || item.enabled) ?? [];
   return (
     <Dialog
       open={open}
@@ -143,7 +136,7 @@ export function SkillsDialog({
     >
       <DialogContent className="w-[min(1000px,calc(100%-2rem))] gap-3 overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Skills & Markdown</DialogTitle>
+          <DialogTitle>skill.md</DialogTitle>
           <DialogDescription>
             Enabled skills are available for discovery. Select a skill to
             request it in your next message. “Read by agent” is recorded in run
@@ -166,15 +159,8 @@ export function SkillsDialog({
             {status}
           </p>
         )}
-        <div className="flex flex-wrap gap-2">
-          <input
-            aria-label="Search skills"
-            className="min-w-0 flex-1 rounded border border-line bg-panel p-2 text-sm"
-            placeholder="Search skills…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <label className="flex items-center gap-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="mr-auto flex items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={enabledOnly}
@@ -187,7 +173,7 @@ export function SkillsDialog({
             variant="secondary"
             onClick={() => setChoosing(!choosing)}
           >
-            Choose folder
+            <FolderOpen className="size-3.5" /> Choose folder
           </Button>
           <Button
             size="sm"
@@ -195,12 +181,12 @@ export function SkillsDialog({
             disabled={!online}
             onClick={() => onAuthor()}
           >
-            Create from recent work
+            <Plus className="size-3.5" /> Create from recent work
           </Button>
         </div>
         {choosing && (
           <form
-            className="flex flex-wrap gap-2"
+            className="flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               void update({
@@ -231,7 +217,9 @@ export function SkillsDialog({
         <p className="break-all text-xs text-muted">
           {library?.folder}
           <button
-            className="ml-2 text-accent"
+            className="ml-2 inline-flex rounded p-1 align-middle text-muted hover:bg-surface-muted"
+            aria-label="Copy folder path"
+            title="Copy folder path"
             disabled={!library}
             onClick={() =>
               void navigator.clipboard.writeText(library!.folder).then(
@@ -240,7 +228,7 @@ export function SkillsDialog({
               )
             }
           >
-            Copy folder path
+            <Copy className="size-3.5" />
           </button>
         </p>
         {library?.diagnostics.map((message, index) => (
@@ -298,7 +286,7 @@ export function SkillsDialog({
               <>
                 <h3 className="font-semibold">{skill.name}</h3>
                 <p className="my-1 text-xs text-muted">{skill.description}</p>
-                <div className="my-2 flex flex-wrap gap-2">
+                <div className="my-3 flex flex-wrap items-center gap-2">
                   <label className="text-xs">
                     <input
                       type="checkbox"

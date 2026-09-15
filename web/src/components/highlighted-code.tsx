@@ -4,20 +4,20 @@ import { Button } from "./ui/button";
 
 export const isCsharp = (language: string) => /^(csharp|cs|c#)$/i.test(language);
 
-export function useCodeTokens(code: string, enabled = true, delay = 0) {
-  const [result, setResult] = useState<{ code: string; tokens: ThemedToken[][] }>();
+export function useCodeTokens(code: string, enabled = true, delay = 0, language = "csharp") {
+  const [result, setResult] = useState<{ code: string; language: string; tokens: ThemedToken[][] }>();
   useEffect(() => {
     // Keep very large sources readable without blocking the UI thread.
     if (!enabled || code.length > 100_000) return;
     let disposed = false;
     const timer = setTimeout(() => {
-      void import("../lib/csharp-highlighter").then(module => module.highlightCsharp(code))
-        .then(tokens => { if (!disposed) setResult({ code, tokens }); })
+      void import("../lib/csharp-highlighter").then(module => module.highlightCsharp(code, language))
+        .then(tokens => { if (!disposed) setResult({ code, language, tokens }); })
         .catch(() => { /* Plain source remains available. */ });
     }, delay);
     return () => { disposed = true; clearTimeout(timer); };
-  }, [code, enabled, delay]);
-  return result?.code === code && enabled ? result.tokens : undefined;
+  }, [code, enabled, delay, language]);
+  return result?.code === code && result.language === language && enabled ? result.tokens : undefined;
 }
 
 export function TokenLine({ tokens, fallback }: { tokens?: ThemedToken[]; fallback: string }) {
@@ -27,7 +27,7 @@ export function TokenLine({ tokens, fallback }: { tokens?: ThemedToken[]; fallba
 export const HighlightedCode = memo(function HighlightedCode({ code, language = "csharp", label = "C# source", highlightLine }: {
   code: string; language?: string; label?: string; highlightLine?: number;
 }) {
-  const tokens = useCodeTokens(code, isCsharp(language));
+  const tokens = useCodeTokens(code, isCsharp(language) || language === "json", 0, isCsharp(language) ? "csharp" : language);
   const [wrap, setWrap] = useState(false);
   const [copyState, setCopyState] = useState("");
   const selectedLine = useRef<HTMLDivElement>(null);

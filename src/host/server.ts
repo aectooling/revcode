@@ -1463,7 +1463,7 @@ export async function createHost(options: HostOptions) {
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy":
-          "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-ancestors 'none'",
+          "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-ancestors 'none'",
       });
       res.end(content);
     } catch (error) {

@@ -3,6 +3,9 @@ import { chromium, expect } from "@playwright/test";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
+// Use the host's actual policy so WASM highlighting cannot pass only in the fixture.
+const hostSource = await readFile("src/host/server.ts", "utf8");
+const contentSecurityPolicy = hostSource.match(/"Content-Security-Policy":\s*"([^"]+)"/)[1];
 const server = createServer(async (req, res) => {
   try {
     const path = resolve(
@@ -21,6 +24,7 @@ const server = createServer(async (req, res) => {
         ".html": "text/html",
       }[extname(path)] ?? "text/html",
     );
+    res.setHeader("Content-Security-Policy", contentSecurityPolicy);
     res.end(bytes);
   } catch {
     res.statusCode = 404;
@@ -92,7 +96,7 @@ await page.route("**/api/**", async (route) => {
       connected: false,
       busy: false,
       chatBusy: false,
-      context: null,
+      context: { document: { token: "doc", title: "VeryLongProjectTitle".repeat(25), activeView: "VeryLongViewTitle".repeat(25), isFamily: false, isReadOnly: false, selection: [] } },
       messages,
       operations: [],
       runs: [run],
@@ -144,7 +148,7 @@ await page.route("**/api/**", async (route) => {
     };
   else if (path === "/api/runs")
     data = {
-      runs: url.searchParams.get("search") === "missing" ? [] : [run],
+      runs: [run],
       retention:
         "Completed details: 200 runs; missing evidence remains labeled.",
     };
@@ -152,7 +156,7 @@ await page.route("**/api/**", async (route) => {
     data = {
       run,
       messages,
-      operations: [],
+      operations: [{ operationId: "op-one", mode: "query", code: "return bad;", status: "failed", error: "Compile error", result: { count: 42 }, logs: ["Verbose execution trace"], diagnostics: [{ message: "Detailed diagnostic" }] }],
       calls: [
         {
           id: "call-one",
@@ -162,8 +166,9 @@ await page.route("**/api/**", async (route) => {
           status: "failed",
           arguments: { code: "return bad;" },
           error: "Compile error",
+          result: { status: "failed", diagnostics: ["Unknown identifier"] },
           startedAt: run.startedAt,
-          operationIds: [],
+          operationIds: ["op-one"],
         },
       ],
       selectedSkills: [],
@@ -183,10 +188,10 @@ await page.route("**/api/**", async (route) => {
 try {
   await page.goto(`http://127.0.0.1:${server.address().port}/#fixture`);
   await page
-    .getByRole("button", { name: "Skills & Markdown", exact: true })
+    .getByRole("button", { name: "skill.md", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByLabel("Search skills").fill("levels");
+  await expect(page.getByLabel("Search skills")).toHaveCount(0);
   await page.getByRole("button", { name: /Review levels Inspect/ }).click();
   await page.getByRole("button", { name: "Enable and select" }).click();
   await expect(
@@ -201,47 +206,80 @@ try {
     page.getByText("var count = 1;", { exact: false }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
-  await page.getByLabel("Assistant mode").selectOption("authoring");
+  await expect(page.getByLabel("Assistant mode")).toHaveCount(0);
+  await expect(page.getByText("Select skills…", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Enter to send · Shift + Enter for a new line")).toHaveCount(0);
   await page.getByLabel("Message the assistant").fill("Create a skill.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
     "Selected skill unavailable",
   );
-  await expect(
-    page.getByRole("button", { name: "Remove selected skill Review levels" }),
-  ).toBeVisible();
   await expect(page.getByLabel("Message the assistant")).toHaveValue(
     "Create a skill.",
   );
   accept = true;
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByLabel("Message the assistant")).toHaveValue("");
-  expect(submitted.mode).toBe("authoring");
+  expect(submitted.mode).toBe("execution");
   expect(submitted.selectedSkillIds).toEqual([skill.id]);
-  await page.getByRole("button", { name: "View tools" }).first().click();
-  await expect(page.getByText("Compile error", { exact: true })).toHaveCount(1);
-  await page
-    .getByRole("button", { name: "Create skill from this run" })
-    .click();
-  await expect(page.getByLabel("Message the assistant")).toHaveValue(
-    /Create a reusable skill/,
-  );
-  await expect(page.getByText("Source runs:", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "skill.md", exact: true }).click();
+  await page.getByRole("button", { name: "Create from recent work" }).click();
+  await expect(page.getByLabel("Message the assistant")).toHaveValue(/Create a reusable skill from the recent run/);
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect.poll(() => submitted.sourceRunIds).toEqual(["run-one"]);
+  await expect(page.getByLabel("Message the assistant")).toHaveValue("");
+  expect(submitted.mode).toBe("authoring");
+  expect(submitted.sourceRunIds).toEqual([run.id]);
+  // A completed authoring draft must not keep later requests in authoring mode.
+  await page.getByLabel("Message the assistant").fill("Create a skill.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByLabel("Message the assistant")).toHaveValue("");
+  expect(submitted.mode).toBe("execution");
+  expect(submitted.sourceRunIds).toEqual([]);
+  await page.getByRole("button", { name: "View tools" }).first().click();
+  await expect(page.getByLabel("Result", { exact: true })).toHaveCount(1);
+  await expect(page.getByLabel("Result", { exact: true })).toContainText("Compile error");
+  await expect(page.getByLabel("Submitted C#", { exact: true })).toHaveCount(1);
+  await expect(page.getByLabel("Inputs", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Verbose execution trace")).toHaveCount(0);
+  await expect(page.getByText("Detailed diagnostic")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /Execute Revit C#/ })).toBeVisible();
+  for (const label of ["Submitted C#", "Result"]) {
+    await expect.poll(() => page.getByLabel(label, { exact: true }).locator("code span").evaluateAll(nodes => nodes.some(node => {
+      const channels = getComputedStyle(node).color.match(/\d+/g)?.slice(0, 3);
+      return channels && new Set(channels).size > 1;
+    }))).toBe(true);
+  }
+  const sidebar = page.getByRole("complementary", { name: "Revcode controls" });
+  expect(await sidebar.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  const title = sidebar.getByText("VeryLongProjectTitle".repeat(25), { exact: true });
+  await expect(title).toHaveCSS("text-overflow", "ellipsis");
+  expect(await title.evaluate(node => node.clientWidth < node.scrollWidth)).toBe(true);
+  const jump = page.getByRole("button", { name: "Jump to message" });
+  const status = page.getByText("Finished · 1 call · 1 failed", { exact: true });
+  expect(Math.abs((await jump.boundingBox()).y - (await status.boundingBox()).y)).toBeLessThan(3);
+  await expect(page.getByRole("button", { name: "Create skill from this run" })).toHaveCount(0);
+  await expect(page.getByText("Select as skill source")).toHaveCount(0);
+  await expect(page.getByLabel("Search run prompts")).toHaveCount(0);
+  await expect.poll(() => page.locator('[aria-label="Result"] code span[style*="color"]').count()).toBeGreaterThan(0);
   const inspector = page.getByRole("complementary", {
     name: "Execution history",
   });
   const initial = (await inspector.boundingBox()).width;
-  await page.getByRole("button", { name: "Expand", exact: true }).click();
+  await page.getByRole("button", { name: "Expand execution history", exact: true }).click();
   expect((await inspector.boundingBox()).width).toBeGreaterThan(initial);
   await page
     .getByRole("separator", { name: "Resize inspector width" })
     .press("ArrowRight");
-  await page.getByLabel("Run filter").selectOption("");
-  await page.getByLabel("Search run prompts").fill("missing");
-  await expect(page.getByText("No matching runs.")).toBeVisible();
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "All runs", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Run 1", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "Run 1", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Run 1", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Collapse execution history" }).click();
+  expect((await inspector.boundingBox()).width).toBe(48);
+  await page.getByRole("button", { name: "Show execution history" }).click();
+  await expect(page.getByRole("button", { name: "Jump to message" })).toBeVisible();
+  await page.getByRole("button", { name: "Jump to message" }).click();
+  await page.screenshot({ path: ".local/execution-history-wide.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page
     .getByRole("separator", { name: "Resize inspector height" })
@@ -250,7 +288,7 @@ try {
     .getByRole("button", { name: "Open settings", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Skills & Markdown", exact: true })
+    .getByRole("button", { name: "skill.md", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
   expect(
@@ -269,7 +307,7 @@ try {
     .getByRole("button", { name: "Collapse sidebar", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Skills & Markdown", exact: true })
+    .getByRole("button", { name: "skill.md", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.waitForTimeout(250);
@@ -279,7 +317,7 @@ try {
   });
   expect(errors).toEqual([]);
   console.log(
-    "PASS skills/runs UI: browser layouts, enable-and-select, failed selection preservation, authoring without native connection, structured sources, history search/navigation and accessible resizing.",
+    "PASS skills/runs UI: browser layouts, enable-and-select, failed selection preservation, authoring without native connection, uncluttered composer, capsule run navigation, icon collapse/expand, JSON highlighting and accessible resizing.",
   );
 } finally {
   await browser.close();

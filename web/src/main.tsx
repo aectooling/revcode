@@ -197,11 +197,10 @@ function App() {
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [previewSkillId, setPreviewSkillId] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<SkillSummary[]>([]);
-  const [chatMode, setChatMode] = useState<"execution" | "authoring">(
-    "execution",
-  );
-  const [sourceRuns, setSourceRuns] = useState<RunSummary[]>([]);
-  const [destinationSkill, setDestinationSkill] = useState<SkillSummary>();
+  const [authoringDraft, setAuthoringDraft] = useState<{
+    sourceRunId?: string;
+    destinationSkillId?: string;
+  }>();
   const [selectedRun, setSelectedRun] = useState("");
   const [olderMessages, setOlderMessages] = useState<Message[]>([]);
   const [jumpMessageId, setJumpMessageId] = useState("");
@@ -329,8 +328,9 @@ function App() {
     (operation) => operation.status === "unknown",
   );
   const canExecute = ready && !busy && !unknown;
+  const authoringRequest = !!authoringDraft || /\b(?:create|make|update|revise|edit)\s+(?:(?:a|an|the|this|that|existing|reusable)\s+){0,3}skill\b/i.test(prompt);
   const canChat =
-    chatMode === "authoring"
+    authoringRequest
       ? hostOnline && !pending && !(state?.chatBusy ?? state?.busy)
       : canExecute;
   const canRunSnippet =
@@ -358,11 +358,11 @@ function App() {
     try {
       const payload = {
         text: prompt.trim(),
-        mode: chatMode,
+        mode: authoringDraft ? "authoring" : "execution",
         selectedSkillIds: selectedSkills.map((skill) => skill.id),
-        sourceRunIds: sourceRuns.map((run) => run.id),
-        ...(destinationSkill
-          ? { destinationSkillId: destinationSkill.id }
+        sourceRunIds: authoringDraft?.sourceRunId ? [authoringDraft.sourceRunId] : [],
+        ...(authoringDraft?.destinationSkillId
+          ? { destinationSkillId: authoringDraft.destinationSkillId }
           : {}),
       };
       const key = JSON.stringify(payload);
@@ -371,9 +371,8 @@ function App() {
       await api("/api/chat", { requestId: chatRequest.current.id, ...payload });
       chatRequest.current = undefined;
       setPrompt("");
+      setAuthoringDraft(undefined);
       setSelectedSkills([]);
-      setSourceRuns([]);
-      setDestinationSkill(undefined);
       composer.current?.focus();
       await refreshState();
     } catch (reason) {
@@ -416,22 +415,23 @@ function App() {
       setPending(false);
     }
   }
-  function author(runs: RunSummary[], skill?: SkillSummary) {
-    setSourceRuns([...runs].sort((a, b) => a.number - b.number));
-    setDestinationSkill(skill?.source === "user" ? skill : undefined);
-    setChatMode("authoring");
+  function author(sourceRunId?: string, skill?: SkillSummary) {
+    setAuthoringDraft({
+      sourceRunId,
+      destinationSkillId: skill?.source === "user" ? skill.id : undefined,
+    });
     setPrompt(
       skill
-        ? `${skill.source === "user" ? "Update" : "Create a user copy of"} the skill "${skill.name}" with what we learned${runs.length ? " from the selected runs" : ""}. Preserve unrelated instructions.`
-        : "Create a reusable skill from the selected runs. Distinguish verified outcomes from incomplete work and include verification and recovery guidance.",
+        ? `${skill.source === "user" ? "Update" : "Create a user copy of"} the skill "${skill.name}" with what we learned${sourceRunId ? " from the recent run" : ""}. Preserve unrelated instructions.`
+        : "Create a reusable skill from the recent run. Distinguish verified outcomes from incomplete work and include verification and recovery guidance.",
     );
     setSkillsOpen(false);
     composer.current?.focus();
   }
   async function authorRecent(skill?: SkillSummary) {
     try {
-      if (skill && sourceRuns.length) {
-        author(sourceRuns, skill);
+      if (skill && authoringDraft?.sourceRunId) {
+        author(authoringDraft.sourceRunId, skill);
         return;
       }
       let recent: RunSummary | undefined;
@@ -450,7 +450,7 @@ function App() {
         );
         return;
       }
-      author(recent ? [recent] : [], skill);
+      author(recent?.id, skill);
       if (!state?.settings.configured)
         toast("Connect a provider to create or update skills.", "info");
     } catch (reason) {
@@ -644,73 +644,6 @@ function App() {
                   onManageProvider={openSettings}
                 />
                 <DocumentTarget label={doc?.title ?? "No document"} />
-                <button
-                  type="button"
-                  className="rounded px-2 py-1 text-xs text-accent"
-                  onClick={() => setSkillsOpen(true)}
-                >
-                  Select skills…
-                </button>
-                <select
-                  aria-label="Assistant mode"
-                  className="max-w-full rounded bg-panel px-1 py-1 text-xs"
-                  value={chatMode}
-                  onChange={(event) =>
-                    setChatMode(event.target.value as "execution" | "authoring")
-                  }
-                >
-                  <option value="execution">Normal chat</option>
-                  <option value="authoring">Skill authoring</option>
-                </select>
-                {chatMode === "authoring" && (
-                  <p className="w-full px-2 text-xs text-muted">
-                    Skill authoring · history and skill files only; modeling and
-                    desktop tools unavailable.
-                  </p>
-                )}
-                {!!selectedSkills.length && (
-                  <div className="flex w-full flex-wrap gap-1 px-2">
-                    {selectedSkills.map((skill) => (
-                      <button
-                        key={skill.id}
-                        type="button"
-                        className="rounded border border-line px-2 py-1 text-xs"
-                        onClick={() =>
-                          setSelectedSkills((current) =>
-                            current.filter((item) => item.id !== skill.id),
-                          )
-                        }
-                        aria-label={`Remove selected skill ${skill.name}`}
-                      >
-                        {skill.name} ·{" "}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {!!sourceRuns.length && (
-                  <div className="w-full px-2 text-xs">
-                    Source runs:{" "}
-                    {sourceRuns.map((run) => (
-                      <button
-                        type="button"
-                        key={run.id}
-                        className="m-1 rounded border border-line p-1"
-                        onClick={() =>
-                          setSourceRuns((current) =>
-                            current.filter((item) => item.id !== run.id),
-                          )
-                        }
-                      >
-                        Run {run.number}: {run.promptPreview} ·{" "}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {destinationSkill && (
-                  <p className="w-full px-2 text-xs">
-                    Update skill: {destinationSkill.name}
-                  </p>
-                )}
               </>
             }
           />
@@ -728,7 +661,6 @@ function App() {
           selectedRun={selectedRun}
           onSelectRun={setSelectedRun}
           onJump={jumpToRun}
-          onAuthor={(runs) => author(runs)}
         />
         <SkillsDialog
           initialId={previewSkillId}

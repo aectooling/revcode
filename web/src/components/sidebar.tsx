@@ -90,7 +90,7 @@ function ConnectionCard({
 }) {
   const { tone, label } = useConnectionSummary(hostOnline, revitConnected);
   return (
-    <div className="px-2.5 py-2">
+    <div className="min-w-0 overflow-hidden px-2.5 py-2">
       <div className="flex items-start gap-2">
         <span
           aria-hidden="true"
@@ -125,7 +125,7 @@ function ConnectionCard({
 
 function DocumentCard({ document }: { document: SidebarDocument | null }) {
   return (
-    <div className="px-2.5 py-2">
+    <div className="min-w-0 overflow-hidden px-2.5 py-2">
       <p className="text-[10px] font-medium uppercase tracking-wider text-muted">
         Active document
       </p>
@@ -246,7 +246,7 @@ export function Sidebar(props: SidebarProps) {
   const panels: ReactNode = (
     <>
       <DocumentCard document={props.document} />
-      <section aria-label="Agent tools" className="px-2.5 py-2">
+      <section aria-label="Agent tools" className="min-w-0 overflow-hidden px-2.5 py-2">
         <h2 className="text-[10px] font-medium uppercase tracking-wider text-muted">
           Agent tools
         </h2>
@@ -280,10 +280,18 @@ export function Sidebar(props: SidebarProps) {
               vision: true,
               desktop: true,
             },
+            {
+              name: "skill_edit_read · skill_save",
+              label: "Author skills",
+              description: "Create and update skills when asked",
+              vision: false,
+              desktop: false,
+              hostOnly: true,
+            },
           ].map((tool) => {
             const reason = !hostOnline
               ? "Host offline"
-              : !revitConnected
+              : !tool.hostOnly && !revitConnected
                 ? "Revit offline"
                 : !providerConfigured
                   ? "Connect a provider"
@@ -295,19 +303,16 @@ export function Sidebar(props: SidebarProps) {
                         ? "Needs review"
                         : "Available";
             return (
-              <li key={tool.name} title={tool.name} className="text-xs">
+              <li key={tool.name} title={tool.name} className="min-w-0 text-xs">
                 <div className="flex items-center gap-2">
                   <span
                     aria-hidden="true"
                     className={`size-1.5 shrink-0 rounded-full ${reason === "Available" ? "bg-accent" : "bg-line-strong"}`}
                   />
-                  <span className="font-medium">{tool.label}</span>
+                  <span className="min-w-0 truncate font-medium">{tool.label}</span>
                 </div>
-                <p className="mt-1 text-[10px] text-muted">
+                <p className="mt-1 truncate text-[10px] text-muted">
                   {tool.description}
-                </p>
-                <p className="mt-0.5 break-all font-mono text-[9px] text-muted">
-                  {tool.name}
                 </p>
                 <p
                   className={`mt-0.5 text-[10px] ${reason === "Available" ? "text-accent" : "text-muted"}`}
@@ -326,7 +331,7 @@ export function Sidebar(props: SidebarProps) {
       ) : null}
       <Button variant="secondary" onClick={props.onOpenSkills}>
         <BookOpen className="size-4" />
-        Skills & Markdown
+        skill.md
       </Button>
       <ConsoleCard onOpenConsole={onOpenConsole} />
       <ProviderCard
@@ -341,7 +346,7 @@ export function Sidebar(props: SidebarProps) {
     <aside
       aria-label="Revcode controls"
       className={cn(
-        "relative z-20 flex shrink-0 flex-col border-b border-line bg-panel lg:h-full lg:border-b-0 lg:border-r lg:transition-[width] lg:duration-200",
+        "relative z-20 flex min-w-0 shrink-0 flex-col border-b border-line bg-panel lg:h-full lg:border-b-0 lg:border-r lg:transition-[width] lg:duration-200",
         collapsed ? "lg:w-12" : "lg:w-[248px]",
       )}
     >
@@ -378,7 +383,7 @@ export function Sidebar(props: SidebarProps) {
       {!isDesktop && mobileOpen && (
         <div
           id="mobile-settings-panel"
-          className="absolute left-2 right-2 top-[calc(100%-1px)] z-30 grid max-h-[min(70vh,520px)] gap-2 overflow-y-auto rounded-md border border-line-strong bg-panel p-2 shadow-pop animate-fade-in lg:hidden"
+          className="absolute left-2 right-2 top-[calc(100%-1px)] z-30 grid min-w-0 grid-cols-[minmax(0,1fr)] max-h-[min(70vh,520px)] gap-2 overflow-x-hidden overflow-y-auto rounded-md border border-line-strong bg-panel p-2 shadow-pop animate-fade-in lg:hidden"
         >
           {panels}
           <ConnectionCard
@@ -424,8 +429,8 @@ export function Sidebar(props: SidebarProps) {
             size="icon-sm"
             variant="ghost"
             onClick={props.onOpenSkills}
-            aria-label="Skills & Markdown"
-            title="Skills & Markdown"
+            aria-label="skill.md"
+            title="skill.md"
           >
             <BookOpen className="size-4" />
           </Button>
@@ -466,7 +471,7 @@ export function Sidebar(props: SidebarProps) {
           </div>
         </div>
       ) : isDesktop ? (
-        <div className="hidden min-h-0 flex-1 flex-col lg:flex">
+        <div className="hidden min-h-0 min-w-0 flex-1 flex-col lg:flex">
           <div className="flex items-center gap-2 px-3 pb-2 pt-2.5">
             <Brand />
             <Button
@@ -480,7 +485,7 @@ export function Sidebar(props: SidebarProps) {
               <PanelLeftClose className="size-4" />
             </Button>
           </div>
-          <div className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto p-3">
+          <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] flex-1 content-start gap-2 overflow-x-hidden overflow-y-auto p-3">
             {panels}
           </div>
           <ConnectionCard
