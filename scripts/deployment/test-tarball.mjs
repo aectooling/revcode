@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run } from './commands.mjs';
-import { json, removeOwned, verify } from './files.mjs';
+import { json, removeOwned, save, verify } from './files.mjs';
 
 const tarball = resolve(process.argv[2] ?? '');
 const packageName = json(fileURLToPath(new URL('../../package.json', import.meta.url))).name;
+const { pnpmVersion } = json(fileURLToPath(new URL('../../release.config.json', import.meta.url)));
 if (!process.argv[2] || !existsSync(tarball)) throw new Error('Usage: test-tarball.mjs <prepared.tgz>');
 const scratch = mkdtempSync(join(tmpdir(), 'revcode tarball test '));
 try {
@@ -15,14 +16,19 @@ try {
     if (process.argv[3] && process.argv[3] !== `${manager}-${scriptsEnabled}`) continue;
     const dir = join(scratch, `${manager}-${scriptsEnabled}`), prefix = join(dir, 'global');
     mkdirSync(dir, { recursive: true });
+    // Corepack resolves versions from cwd. Keep the isolated fixture on the
+    // release toolchain instead of its unrelated default outside the repo.
+    if (manager === 'pnpm') save(join(dir, 'package.json'), { private: true, packageManager: `pnpm@${pnpmVersion}` });
     const environment = {
       LOCALAPPDATA: join(dir, 'local'), APPDATA: join(dir, 'roaming'), ProgramData: join(dir, 'program'),
       npm_config_cache: join(dir, 'empty-cache'), npm_config_registry: 'http://127.0.0.1:1',
       npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false',
       PNPM_HOME: join(dir, 'pnpm-bin'),
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
     };
     mkdirSync(environment.PNPM_HOME, { recursive: true });
     environment.PATH = environment.PNPM_HOME + delimiter + process.env.PATH;
+    if (manager === 'pnpm') assert.equal(run(manager, ['--version'], { cwd: dir, env: environment }).stdout, pnpmVersion, 'Tarball test requires the configured pnpm version');
     const args = manager === 'npm'
       // This isolated fixture has exactly one package and no dependencies. npm
       // 12 cannot match a name allowlist to a file tarball's registry identity.
