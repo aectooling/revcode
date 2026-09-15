@@ -165,7 +165,7 @@ function readUtf8Range(
     totalBytes: bytes.length,
   };
 }
-/** Discovery adapted from Hoppercode; see THIRD_PARTY_NOTICES.md. All run reads use copied bytes. */
+/** Skill discovery and run reads use copied bytes. */
 export class HostSkillLibrary {
   private preferences: Preferences;
   private entries: SkillPreview[] = [];

@@ -57,7 +57,7 @@ function HelpText({ children }: { children: React.ReactNode }) {
   return <p className="text-[11px] leading-relaxed text-muted">{children}</p>;
 }
 
-// Follows Hoppercode's provider overview → catalog → setup → model selection flow.
+// Provider setup moves from overview to catalog to setup and model selection.
 // The local host owns all credentials and provider-specific Pi authentication prompts.
 export function ProviderDialog({
   providers,

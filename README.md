@@ -52,7 +52,7 @@ Open **Skills & Markdown** from the sidebar or composer to browse instructions, 
 
 ## Connect a provider
 
-Provider setup follows Hoppercode's flow: review connected providers, search the Pi catalog, choose a sign-in method, then select a model. Browser sign-in is offered when supported by that provider, including subscription-backed providers exposed by Pi. Follow the browser/device-code instructions; if a provider requests a code or another field, enter it in the setup dialog. API-key entry remains available for providers that support it. Sign-in can be cancelled, and connections can be refreshed or disconnected.
+Provider setup lets you review connected providers, search the Pi catalog, choose a sign-in method, then select a model. Browser sign-in is offered when supported by that provider, including subscription-backed providers exposed by Pi. Follow the browser/device-code instructions; if a provider requests a code or another field, enter it in the setup dialog. API-key entry remains available for providers that support it. Sign-in can be cancelled, and connections can be refreshed or disconnected.
 
 Existing Pi sign-ins are reused. Credentials are managed by Pi's own storage and cross-process refresh locks, normally at `~/.pi/agent/auth.json`. `PI_CODING_AGENT_DIR` changes that base directory; `REVCODE_PI_AUTH_PATH` overrides the credential file explicitly. Signing out affects the shared Pi credential for that provider. Credentials are never included in the model conversation or retained in browser storage.
 
@@ -160,7 +160,7 @@ All steps and optional verification compile before editing. Each step owns an in
 
 `ctx.StepResults` contains earlier materialized `System.Text.Json.JsonElement` results, available only within the batch. Limits are 1–20 steps, 64 KiB combined source/imports, 256 KiB aggregate result payload (with space reserved for receipts), and 100 log lines/16,000 characters. History distinguishes `committed`, `rolledBack`, `notRun`, and `unknown` steps. Rolled-back element results are discarded.
 
-This guarantee covers transaction-backed edits to the target during normal execution. It does not cover crashes, other documents, save/sync/export, document lifecycle, family loading, or filesystem/network effects. Recognized unsupported calls are rejected by the compiler; arbitrary C# remains full trust. Never retry individual steps or automatically replay an uncertain batch. See [validation and remaining acceptance checks](docs/TESTING.md).
+This guarantee covers transaction-backed edits to the target during normal execution. It does not cover crashes, other documents, save/sync/export, document lifecycle, family loading, or filesystem/network effects. Recognized unsupported calls are rejected by the compiler; arbitrary C# remains full trust. Never retry individual steps or automatically replay an uncertain batch.
 
 ## Architecture
 
@@ -182,7 +182,7 @@ Compilation happens outside Revit to isolate Roslyn dependencies. The emitted as
 
 The browser and native connection use separate credentials and bind only to loopback. The host records operation intent before dispatch, and duplicate request IDs do not replay edits. A disconnect after dispatch creates an uncertain outcome until a retained native receipt reconciles it. There is no claim of exactly-once execution across a Revit crash.
 
-See [PROTOCOL.md](PROTOCOL.md) for the implemented wire boundary, [PLAN.md](PLAN.md) for the longer-term architecture, and [docs/TESTING.md](docs/TESTING.md) for validation and manual checks.
+See [desktop protocol and limits](docs/DESKTOP-PROTOCOL.md) for the desktop interaction contract and recovery rules.
 
 ## Development and limits
 
@@ -196,8 +196,8 @@ npm run build:install -- open-revit   # Build, install, and reopen Revit
 
 Native add-in changes require closing Revit and reinstalling. C# snippets compile on each call and require no restart. Browser assets and Node dependencies are served from the installed versioned package, so rebuilding the repository alone does not update an installed package.
 
-The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement the full plan's shared multi-process scheduler, multi-agent workflows, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
+The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement a shared multi-process scheduler, multi-agent workflows, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
 
 To uninstall, close Revit and run `./scripts/uninstall.ps1`. This removes only Revcode's manifests, preserving settings, history, and versioned package files.
 
-MIT license. Architecture inspired by [Hoppercode](https://github.com/tsoumdoa/hoppercode); this MVP uses its Pi-based host/native separation. The shipped Pi, ZeroMQ, Roslyn, React, and Node dependencies retain their own licenses.
+MIT license. The shipped Pi, ZeroMQ, Roslyn, React, and Node dependencies retain their own licenses.

@@ -26,7 +26,7 @@ try {
     Invoke-Checked 'npm.cmd' @('run', 'build')
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'dist') -Destination $packageRoot -Recurse
-    foreach ($file in @('package.json', 'package-lock.json', 'LICENSE', 'README.md', 'PLAN.md', 'PROTOCOL.md', 'THIRD_PARTY_NOTICES.md')) {
+    foreach ($file in @('package.json', 'package-lock.json', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination $packageRoot
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs') -Destination $packageRoot -Recurse
