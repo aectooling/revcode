@@ -141,9 +141,9 @@ await page.route("**/api/**", async (route) => {
     data = {
       skill,
       files: {
-        "levels/SKILL.md":
-          "# Review levels\nCheck the document and report elevations.",
         "levels/example.cs": "var count = 1;\nreturn count;",
+        "levels/SKILL.md":
+          '\uFEFF---\r\nname: "Review levels"\r\ndescription: >-\r\n  Inspect level elevations safely.\r\nmetadata:\r\n  tags: [revit, levels]\r\n---\r\n# Review levels\nCheck the document and report elevations.',
       },
     };
   else if (path === "/api/runs")
@@ -191,8 +191,12 @@ try {
     .getByRole("button", { name: "skill.md", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByLabel("Search skills")).toHaveCount(0);
+  await page.getByLabel("Search skills").fill("no matching skill");
+  await expect(page.getByText("No matching skills.", { exact: true })).toBeVisible();
+  await page.getByLabel("Search skills").fill("levels");
   await page.getByRole("button", { name: /Review levels Inspect/ }).click();
+  await expect(page.getByLabel("Reference file")).toHaveValue("levels/SKILL.md");
+  await expect(page.getByRole("region", { name: "Frontmatter" })).toContainText('name: "Review levels"');
   await page.getByRole("button", { name: "Enable and select" }).click();
   await expect(
     page.getByRole("button", {
@@ -301,6 +305,22 @@ try {
     path: ".local/skills-runs-mobile.png",
     fullPage: true,
   });
+  await page.getByRole("button", { name: /Review levels Inspect/ }).click();
+  await expect(page.getByLabel("Reference file")).toHaveValue("levels/example.cs");
+  await page.getByLabel("Reference file").selectOption("levels/SKILL.md");
+  await expect(page.getByRole("region", { name: "Frontmatter" })).toContainText('name: "Review levels"');
+  await expect(page.getByLabel("Skill preview").locator(".message-markdown")).not.toContainText("metadata:");
+  await expect(page.getByLabel("Skill preview").getByRole("heading", { name: "Review levels", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "Choose folder" }).click();
+  await page.getByLabel("Existing absolute folder").fill("C:/edited-skills");
+  await page.waitForResponse(response => new URL(response.url()).pathname === "/api/skills");
+  await expect(page.getByLabel("Existing absolute folder")).toHaveValue("C:/edited-skills");
+  await page.getByRole("button", { name: "Choose folder" }).click();
+  await expect(page.getByLabel("Reference file")).toBeVisible();
+  await expect(page.getByLabel("Skill preview")).toContainText("Check the document and report elevations.");
+  expect(await page.getByRole("dialog").evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await page.getByRole("button", { name: "Back to skills" }).click();
+  await expect(page.getByRole("button", { name: /Review levels Inspect/ })).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 960 });
   await page
