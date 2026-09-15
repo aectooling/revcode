@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { run } from './commands.mjs';
 import { json, removeOwned, verify } from './files.mjs';
 
 const tarball = resolve(process.argv[2] ?? '');
+const packageName = json(fileURLToPath(new URL('../../package.json', import.meta.url))).name;
 if (!process.argv[2] || !existsSync(tarball)) throw new Error('Usage: test-tarball.mjs <prepared.tgz>');
 const scratch = mkdtempSync(join(tmpdir(), 'revcode tarball test '));
 try {
@@ -26,7 +28,9 @@ try {
       // 12 cannot match a name allowlist to a file tarball's registry identity.
       // Enable its lifecycle for this invocation only; no user policy is changed.
       ? ['install', '--global', '--prefix', prefix, '--offline', ...(scriptsEnabled ? ['--dangerously-allow-all-scripts'] : ['--ignore-scripts']), tarball]
-      : ['add', '--global', '--global-dir', prefix, '--global-bin-dir', environment.PNPM_HOME, '--store-dir', join(dir, 'empty-store'), '--offline', ...(scriptsEnabled ? ['--allow-build=revcode'] : ['--ignore-scripts']), tarball];
+      // pnpm 11 stores each global installation in prefix/v11/<hash>. Local
+      // tarball approvals must match the source identity relative to that path.
+      : ['add', '--global', '--global-dir', prefix, '--global-bin-dir', environment.PNPM_HOME, '--store-dir', join(dir, 'empty-store'), '--offline', ...(scriptsEnabled ? [`--allow-build=${packageName}@file:${relative(join(prefix, 'v11', 'installation'), tarball).replaceAll('\\', '/')}`] : ['--ignore-scripts']), tarball];
     run(manager, args, { cwd: dir, env: environment, inherit: true });
     if (scriptsEnabled) assert.ok(existsSync(join(environment.LOCALAPPDATA, 'Revcode', 'installation.json')), `${manager} did not execute postinstall`);
     else assert.equal(existsSync(join(environment.LOCALAPPDATA, 'Revcode', 'installation.json')), false, `${manager} ignored --ignore-scripts`);
@@ -52,7 +56,7 @@ try {
     // Never touch the user's real registration; all profile roots above are isolated.
     if (!json(join(environment.LOCALAPPDATA, 'Revcode', 'installation.json')).pending) {
       if (manager === 'npm' && !scriptsEnabled) {
-        run('npm', ['uninstall', '--global', '--prefix', prefix, '--ignore-scripts', 'revcode'], { cwd: dir, env: environment });
+        run('npm', ['uninstall', '--global', '--prefix', prefix, '--ignore-scripts', packageName], { cwd: dir, env: environment });
         assert.equal(existsSync(cli), false, 'Global CLI was not removed');
         assert.ok(existsSync(payload), 'npm removal unexpectedly removed the installed payload');
         run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(payload, 'scripts', 'deployment', 'uninstall.ps1')], { cwd: dir, env: environment });

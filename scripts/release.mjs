@@ -197,7 +197,10 @@ function publish() {
   receipt.steps.tag = true; save(receiptPath(), receipt);
   const releaseResult = run('gh', ['release', 'view', tag, '--repo', cfg.repository, '--json', 'isDraft,url'], { allowFailure: true });
   if (releaseResult.status !== 0) gh('release', 'create', tag, '--repo', cfg.repository, '--verify-tag', '--draft', '--title', `Revcode ${receipt.version}`, '--notes-file', join(dir, 'release-notes.md'));
-  const remoteRelease = JSON.parse(gh('api', `repos/${cfg.repository}/releases/tags/${tag}`));
+  // GitHub's by-tag REST endpoint does not return draft releases.
+  const releaseIdentity = JSON.parse(gh('release', 'view', tag, '--repo', cfg.repository, '--json', 'databaseId'));
+  const remoteRelease = JSON.parse(gh('api', `repos/${cfg.repository}/releases/${releaseIdentity.databaseId}`));
+  if (remoteRelease.tag_name !== tag) throw new Error('GitHub release tag conflicts.');
   if (remoteRelease.body.trim() !== readFileSync(join(dir, 'release-notes.md'), 'utf8').trim()) throw new Error('GitHub release notes conflict.');
   for (const file of assets) {
     const path = join(dir, file), asset = remoteRelease.assets.find(asset => asset.name === file);

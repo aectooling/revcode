@@ -16,8 +16,12 @@ Autodesk references:
 
 ## User installation after publication
 
+The public npm package is `@aectooling/revcode`; the CLI command remains `revcode`.
+The scoped release starts at 0.1.1 because the abandoned unscoped candidate already
+has a `v0.1.0` Git tag and draft release. Preserve that tag and its artifacts.
+
 ```powershell
-pnpm add -g revcode
+pnpm add -g @aectooling/revcode
 
 # Required if lifecycle scripts were blocked; also retries pending activation:
 revcode install
@@ -25,7 +29,7 @@ revcode install --revit-years 2025,2026,2027
 revcode doctor
 revcode rollback
 revcode uninstall
-pnpm remove -g revcode
+pnpm remove -g @aectooling/revcode
 ```
 
 Node 22.19+ is needed for package-manager and CLI bootstrap execution. The application uses bundled Node. The distribution embeds `payload.zip`, containing all production dependencies, native ZeroMQ, add-ins, host/UI, and self-contained compiler/desktop helpers. Installation never builds or downloads a secondary payload. Package-manager lifecycle policies do not affect the explicit CLI installer.
@@ -38,7 +42,7 @@ The installer uses a Windows exclusive file handle, validates all manifest desti
 
 Active and previous versions are recorded per year. Cleanup preserves every referenced payload, pending payloads, and each year's previous release. Unknown legacy directories remain untouched. Rollback checks current Revit compatibility and user-data schema. Automatic schema changes are refused until an explicit migration is implemented.
 
-Settings/history are preserved by removal. `pnpm remove -g revcode` alone does not unregister the add-in. If the global CLI is gone, run the standalone helper in a retained payload:
+Settings/history are preserved by removal. `pnpm remove -g @aectooling/revcode` alone does not unregister the add-in. If the global CLI is gone, run the standalone helper in a retained payload:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Revcode\packages\<version>\scripts\deployment\uninstall.ps1"
