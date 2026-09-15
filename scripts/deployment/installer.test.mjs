@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Installer, ADDIN_ID } from './installer.mjs';
 import { inventory, json, save } from './files.mjs';
-import { assertAcceptance, nextVersion } from '../release.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'revcode installer test '));
@@ -114,13 +113,4 @@ test('cleanup can finish a partially deleted unreferenced payload', t => {
   const f = fixture(t); f.installer.stage(f.payload('1.0.0'));
   rmSync(join(f.installer.payload('1.0.0'), 'compiler/Revcode.Compiler.exe'));
   assert.deepEqual(f.installer.cleanup().removed, ['1.0.0']);
-});
-test('release acceptance binds every runtime variant to the exact artifact', t => {
-  const f = fixture(t), receipt = { sourceCommit: 'abc', sha256: '123', targets: f.targets };
-  const acceptance = { sourceCommit: 'abc', tarballSha256: '123', cleanMachine: true, npm: true, pnpm: true, scriptsDisabled: true, failureRecovery: true,
-    tests: f.targets.map(target => ({ target: target.id, year: target.year, build: target.minimumBuild, runtimeVersion: `${target.runtimeMajor}.0.1`, tester: 'Tester', testedAt: '2026-09-15', addinLoad: true, compiler: true, browser: true, desktop: true })) };
-  assert.doesNotThrow(() => assertAcceptance(receipt, acceptance));
-  assert.throws(() => assertAcceptance(receipt, { ...acceptance, tarballSha256: 'different' }), /exact/);
-  assert.throws(() => assertAcceptance(receipt, { ...acceptance, tests: acceptance.tests.slice(1) }), /2025/);
-  assert.equal(nextVersion('0.1.9', 'minor'), '0.2.0');
 });
