@@ -57,6 +57,31 @@ function detail(
   };
 }
 describe("durable run history", () => {
+  it.each(["finished", "failed"] as const)("recovers a published %s detail over a stale running summary", async (status) => {
+    const { history, dir } = await fixture();
+    const run = detail(1, "running");
+    await history.save(run);
+    const summaryPath = join(dir, "run-1.summary.json");
+    const staleSummary = await readFile(summaryPath, "utf8");
+    run.run.status = status;
+    run.run.endedAt = "2026-09-15T04:00:00.000Z";
+    await history.save(run);
+    // Simulate a crash after detail publication but before summary publication.
+    await writeFile(summaryPath, staleSummary);
+    const reopened = await RunHistory.open(dir);
+    expect((await reopened.detail(run.run.id)).run).toEqual(run.run);
+    expect(JSON.parse(await readFile(summaryPath, "utf8"))).toEqual(run.run);
+    expect((await RunHistory.open(dir)).list().runs[0].status).toBe(status);
+  });
+  it("does not resurrect details after a summary-first retention crash", async () => {
+    const { history, dir } = await fixture();
+    const run = detail(1);
+    await history.save(run);
+    await writeFile(join(dir, "run-1.summary.json"), JSON.stringify({ ...run.run, detailsAvailable: false }));
+    const reopened = await RunHistory.open(dir);
+    expect((await reopened.detail(run.run.id)).run.detailsAvailable).toBe(false);
+    expect(await readdir(dir)).not.toContain("run-1.detail.json");
+  });
   it("keeps cursor pages stable when a new run arrives and searches all retained summaries", async () => {
     const { history } = await fixture();
     for (let n = 1; n <= 8; n++) await history.save(detail(n));

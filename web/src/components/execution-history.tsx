@@ -232,21 +232,24 @@ export function ExecutionHistory({
     const timer = setTimeout(() => void load(), 200);
     return () => clearTimeout(timer);
   }, [activity]);
-  const open = async (id: string) => {
-    try {
-      const detail = await api<RunDetail>(
-        `/api/runs/${encodeURIComponent(id)}`,
-      );
-      setDetails((current) => ({ ...current, [id]: detail }));
-    } catch (reason) {
-      setError(String(reason));
-    }
-  };
   useEffect(() => {
+    if (!online) return;
+    let active = true;
+    const open = async (id: string) => {
+      try {
+        const detail = await api<RunDetail>(
+          `/api/runs/${encodeURIComponent(id)}`,
+        );
+        if (active) setDetails((current) => ({ ...current, [id]: detail }));
+      } catch (reason) {
+        if (active) setError(String(reason));
+      }
+    };
     const ids = selectedRun && !["manual", "older"].includes(selectedRun)
       ? [selectedRun] : runs.filter(run => run.detailsAvailable).map(run => run.id);
     for (const id of ids) void open(id);
-  }, [selectedRun, activity, runs]);
+    return () => { active = false; };
+  }, [selectedRun, activity, runs, online]);
   const visible = selectedRun
     ? runs.some((run) => run.id === selectedRun)
       ? runs.filter((run) => run.id === selectedRun)

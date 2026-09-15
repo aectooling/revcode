@@ -62,13 +62,16 @@ export class RunHistory {
       recursive: true,
       mode: 0o700,
     });
-    // A crash may publish the detail before its first summary. Recover the complete
-    // evidence before computing artifact liveness or assigning the next run number.
+    // Detail is published before summary on every save. Reconcile interrupted
+    // publications before recovery, but respect summary-first retention tombstones.
     const files = new Set(await readdir(directory));
     for (const file of files)
       if (file.endsWith(".detail.json")) {
         const id = file.slice(0, -".detail.json".length);
-        if (files.has(`${id}.summary.json`)) continue;
+        const summary = files.has(`${id}.summary.json`)
+          ? JSON.parse(await readFile(history.file(id, "summary"), "utf8")) as RunSummary
+          : undefined;
+        if (summary?.detailsAvailable === false) continue;
         const detail = JSON.parse(
           await readFile(history.file(id, "detail"), "utf8"),
         ) as RunDetail;
@@ -76,6 +79,7 @@ export class RunHistory {
           throw new Error(
             "History detail identity does not match its filename.",
           );
+        if (JSON.stringify(summary) === JSON.stringify(detail.run)) continue;
         await history.atomic(
           history.file(id, "summary"),
           JSON.stringify(detail.run),

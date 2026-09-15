@@ -335,6 +335,26 @@ try {
     path: ".local/skills-runs-wide.png",
     fullPage: true,
   });
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  // Hold an earlier snapshot until a later request has displayed its final result.
+  const held = [];
+  await page.route("**/api/runs/run-one", route => { held.push(route); });
+  await page.getByRole("button", { name: "All runs", exact: true }).click();
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  const stale = held[0];
+  await page.getByRole("button", { name: "Run 1", exact: true }).click();
+  await expect.poll(() => held.length).toBeGreaterThan(1);
+  const finalDetail = {
+    run, messages, calls: [],
+    operations: [{ operationId: "race-op", mode: "query", code: "return 42;", status: "succeeded", result: { reviewMarker: "confirmed-result" } }],
+  };
+  for (const route of held.slice(1)) await route.fulfill({ json: finalDetail });
+  await expect(inspector).toContainText("confirmed-result");
+  await stale.fulfill({ json: { ...finalDetail, operations: [{ ...finalDetail.operations[0], status: "running", result: { reviewMarker: "stale-result" } }] } });
+  // Allow fetch callbacks and React's subsequent paint to complete.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(inspector).toContainText("confirmed-result");
+  await expect(inspector).not.toContainText("stale-result");
   expect(errors).toEqual([]);
   console.log(
     "PASS skills/runs UI: browser layouts, enable-and-select, failed selection preservation, authoring without native connection, uncluttered composer, capsule run navigation, icon collapse/expand, JSON highlighting and accessible resizing.",
