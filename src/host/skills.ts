@@ -7,6 +7,7 @@ import {
   lstat,
   writeFile,
   unlink,
+  rm,
   open,
 } from "node:fs/promises";
 import { constants } from "node:fs";
@@ -31,6 +32,7 @@ import { Type } from "typebox";
 export const SKILL_LIMITS = {
   fileBytes: 256 * 1024,
   files: 500,
+  depth: 16,
   catalogBytes: 24 * 1024,
   readBytes: 16 * 1024,
   contextBytes: 128 * 1024,
@@ -125,11 +127,50 @@ const revision = (files: Record<string, string>) =>
 const supported = (p: string) =>
   [".md", ".cs"].includes(extname(p).toLowerCase());
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Byte ranges must neither split UTF-8 characters nor return a nonadvancing page. */
+function readUtf8Range(
+  content: string,
+  offset = 0,
+  limit = SKILL_LIMITS.readBytes,
+) {
+  const bytes = Buffer.from(content);
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > bytes.length ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1
+  )
+    throw new Error("Invalid range.");
+  const continuation = (index: number) =>
+    index < bytes.length && (bytes[index]! & 0xc0) === 0x80;
+  if (continuation(offset))
+    throw new Error(
+      "Offset must be a UTF-8 character boundary; use nextOffset from the previous read.",
+    );
+  let end = Math.min(
+    bytes.length,
+    offset + Math.min(limit, SKILL_LIMITS.readBytes),
+  );
+  while (end > offset && continuation(end)) end--;
+  if (end === offset && offset < bytes.length)
+    throw new Error("Read limit is too small for the next UTF-8 character.");
+  return {
+    content: bytes.subarray(offset, end).toString("utf8"),
+    offset,
+    nextOffset: end,
+    complete: offset === 0 && end === bytes.length,
+    truncated: end < bytes.length,
+    totalBytes: bytes.length,
+  };
+}
 /** Discovery adapted from Hoppercode; see THIRD_PARTY_NOTICES.md. All run reads use copied bytes. */
 export class HostSkillLibrary {
   private preferences: Preferences;
   private entries: SkillPreview[] = [];
   private diagnostics: string[] = [];
+  private userFileCount = 0;
   constructor(
     private projectRoot: string,
     private preferencesPath: string,
@@ -158,42 +199,47 @@ export class HostSkillLibrary {
         (p) => p.endsWith(".pending.json"),
       )) {
         const path = resolve(directory, name);
-        const tx = JSON.parse(await readFile(path, "utf8")) as {
-          root: string;
-          before: Record<string, string>;
-          after: Record<string, string>;
-          changedFiles: string[];
-        };
-        tx.root = await realpath(tx.root);
-        let safe = true;
-        for (const file of tx.changedFiles) {
-          const destination = await this.validatePath(tx.root, file);
-          const current = await readFile(destination, "utf8").catch(
-            (e: NodeJS.ErrnoException) => {
-              if (e.code === "ENOENT") return undefined;
-              throw e;
-            },
-          );
-          if (current !== tx.before[file] && current !== tx.after[file]) {
-            safe = false;
-            break;
+        try {
+          const tx = JSON.parse(await readFile(path, "utf8")) as {
+            root: string;
+            before: Record<string, string>;
+            after: Record<string, string>;
+            changedFiles: string[];
+          };
+          tx.root = await realpath(tx.root);
+          let safe = true;
+          for (const file of tx.changedFiles) {
+            const destination = await this.validatePath(tx.root, file);
+            const current = await readFile(destination, "utf8").catch(
+              (e: NodeJS.ErrnoException) => {
+                if (e.code === "ENOENT") return undefined;
+                throw e;
+              },
+            );
+            if (current !== tx.before[file] && current !== tx.after[file]) {
+              safe = false;
+              break;
+            }
           }
-        }
-        if (!safe) continue;
-        for (const file of tx.changedFiles) {
-          const destination = await this.validatePath(tx.root, file);
-          if (tx.before[file] === undefined)
-            await unlink(destination).catch((e: NodeJS.ErrnoException) => {
-              if (e.code !== "ENOENT") throw e;
-            });
-          else {
-            await mkdir(dirname(destination), { recursive: true });
-            const temp = `${destination}.${randomUUID()}.tmp`;
-            await writeFile(temp, tx.before[file], { mode: 0o600 });
-            await rename(temp, destination);
+          if (!safe) continue;
+          for (const file of tx.changedFiles) {
+            const destination = await this.validatePath(tx.root, file);
+            if (tx.before[file] === undefined)
+              await unlink(destination).catch((e: NodeJS.ErrnoException) => {
+                if (e.code !== "ENOENT") throw e;
+              });
+            else {
+              await mkdir(dirname(destination), { recursive: true });
+              const temp = `${destination}.${randomUUID()}.tmp`;
+              await writeFile(temp, tx.before[file], { mode: 0o600 });
+              await rename(temp, destination);
+            }
           }
+          await unlink(path);
+        } catch {
+          // Keep unreadable or unrecoverable records for inspection. refresh()
+          // reports them and blocks authoring without preventing host startup.
         }
-        await unlink(path);
       }
     });
   }
@@ -214,6 +260,7 @@ export class HostSkillLibrary {
   }
   async refresh() {
     await this.loadPreferences();
+    let userFileCount = 0;
     const entries: SkillPreview[] = [],
       diagnostics: string[] = [];
     for (const [configured, source] of [
@@ -242,7 +289,7 @@ export class HostSkillLibrary {
         roots: string[] = [];
       let count = 0;
       const walk = async (dir: string, depth: number): Promise<void> => {
-        if (depth > 16) {
+        if (depth > SKILL_LIMITS.depth) {
           diagnostics.push(`Nesting limit: ${dir}`);
           return;
         }
@@ -305,6 +352,7 @@ export class HostSkillLibrary {
       } catch (e) {
         diagnostics.push(errorText(e));
       }
+      if (source === "user") userFileCount = count;
       const owner = (p: string) =>
         roots
           .filter((r) => inside(r, p))
@@ -370,6 +418,7 @@ export class HostSkillLibrary {
       );
     this.entries = entries;
     this.diagnostics = diagnostics;
+    this.userFileCount = userFileCount;
   }
   snapshot(): SkillLibrarySnapshot {
     return structuredClone({
@@ -568,10 +617,24 @@ export class HostSkillLibrary {
       )
         throw new Error("Invalid file count.");
       const names = Object.keys(files);
+      const projectedFileCount =
+        this.userFileCount - Object.keys(old?.files ?? {}).length + names.length;
+      if (projectedFileCount > SKILL_LIMITS.files)
+        throw new Error(
+          `Library limited to ${SKILL_LIMITS.files} supported files; no files changed.`,
+        );
       if (new Set(names.map((p) => p.toLowerCase())).size !== names.length)
         throw new Error("Case-insensitive destination collision.");
       for (const [path, content] of Object.entries(files)) {
         await this.validatePath(root, path);
+        const parts = path.split("/");
+        if (
+          parts.length > SKILL_LIMITS.depth + 1 ||
+          parts.some((part) => part.startsWith("."))
+        )
+          throw new Error(
+            "Skill files must be visible within the library discovery depth.",
+          );
         if (
           typeof content !== "string" ||
           Buffer.byteLength(content) > SKILL_LIMITS.fileBytes
@@ -682,17 +745,23 @@ export class HostSkillLibrary {
       await mkdir(dirname(historyPath), { recursive: true });
       // Durable transaction stores complete before/after bytes before any destination is replaced.
       const transaction = `${historyPath}.pending.json`;
-      await writeFile(
-        transaction,
-        JSON.stringify({
-          root,
-          before: old?.files || {},
-          after: files,
-          changedFiles,
-          history,
-        }),
-        { mode: 0o600 },
-      );
+      const staging = `${transaction}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(
+          staging,
+          JSON.stringify({
+            root,
+            before: old?.files || {},
+            after: files,
+            changedFiles,
+            history,
+          }),
+          { mode: 0o600, flush: true },
+        );
+        await rename(staging, transaction);
+      } finally {
+        await rm(staging, { force: true });
+      }
       for (const path of changedFiles) {
         await this.validatePath(root, path);
         const current = await readFile(resolve(root, path), "utf8").catch(
@@ -834,32 +903,13 @@ export class SkillRunSnapshot {
     const content = e.files[key];
     if (content === undefined)
       throw new Error("File unavailable in this skill snapshot.");
-    if (
-      !Number.isInteger(offset) ||
-      offset < 0 ||
-      !Number.isInteger(limit) ||
-      limit < 1
-    )
-      throw new Error("Invalid range.");
-    const bytes = Buffer.from(content);
-    const end = Math.min(
-      bytes.length,
-      offset + Math.min(limit, SKILL_LIMITS.readBytes),
-    );
-    const result = bytes.subarray(offset, end).toString("utf8");
-    if (this.consumed + Buffer.byteLength(result) > SKILL_LIMITS.contextBytes)
-      throw new Error("Cumulative skill context budget reached.");
-    this.charge(Buffer.byteLength(result) + 512);
+    const range = readUtf8Range(content, offset, limit);
+    this.charge(Buffer.byteLength(range.content) + 512);
     return {
       id: e.skill.id,
       revision: e.skill.revision,
       path: key,
-      offset,
-      nextOffset: end,
-      complete: offset === 0 && end === bytes.length,
-      truncated: end < bytes.length,
-      totalBytes: bytes.length,
-      content: result,
+      ...range,
     };
   }
   search(query: string) {
@@ -909,7 +959,7 @@ export function createSkillTools(services: RunServices): ToolDefinition[] {
         name: "read",
         label: "Read skill",
         description:
-          "Read enabled immutable skill Markdown/C# by skill ID or catalog path, with byte offset/limit. Truncated reads are incomplete. No other filesystem access.",
+          "Read enabled immutable skill Markdown/C# by skill ID or catalog path, with byte offset/limit. Continue truncated reads using nextOffset; ranges preserve UTF-8 characters. No other filesystem access.",
         parameters: Type.Object({
           path: Type.String(),
           file: Type.Optional(Type.String()),
@@ -943,7 +993,7 @@ export function createSkillTools(services: RunServices): ToolDefinition[] {
         name: "skill_edit_read",
         label: "Read skill for editing",
         description:
-          "Read a skill, including disabled skills, for explicitly requested authoring. Bundled skills are copy-only: create a new user skill without an existing ID. Does not activate workflow instructions.",
+          "Read a skill, including disabled skills, for explicitly requested authoring. Continue truncated reads using nextOffset. Bundled skills are copy-only: create a new user skill without an existing ID. Does not activate workflow instructions.",
         parameters: Type.Object({
           id: Type.String(),
           file: Type.Optional(Type.String()),
@@ -959,10 +1009,8 @@ export function createSkillTools(services: RunServices): ToolDefinition[] {
               .join("/");
           if (preview.files[file] === undefined)
             throw new Error("File unavailable.");
-          const bytes = Buffer.from(preview.files[file]);
-          const offset = p.offset || 0;
-          const end = Math.min(bytes.length, offset + SKILL_LIMITS.readBytes);
-          const content = bytes.subarray(offset, end).toString("utf8");
+          const range = readUtf8Range(preview.files[file], p.offset ?? 0);
+          const { content, offset, complete } = range;
           authoringBytes += Buffer.byteLength(content) + 512;
           services.skills?.charge(Buffer.byteLength(content) + 512);
           if (authoringBytes > SKILL_LIMITS.contextBytes)
@@ -972,7 +1020,7 @@ export function createSkillTools(services: RunServices): ToolDefinition[] {
             revision: preview.skill.revision,
             path: file,
             offset,
-            complete: offset === 0 && end === bytes.length,
+            complete,
             authoring: true,
           });
           return result({
@@ -980,11 +1028,7 @@ export function createSkillTools(services: RunServices): ToolDefinition[] {
             copyOnly: preview.skill.source === "bundled",
             authoringRoot: boundLibrary!.folder,
             file,
-            content,
-            offset,
-            nextOffset: end,
-            truncated: end < bytes.length,
-            totalBytes: bytes.length,
+            ...range,
             preferencesRevision: services.library!.snapshot().revision,
             authoring: true,
           });
