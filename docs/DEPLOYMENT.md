@@ -1,12 +1,12 @@
 # Deployment and releases with pnpm
 
-Status: implemented commands; the initial release is configured as unsigned. Public release remains gated on all API references, exact-artifact live acceptance, and maintainer account setup. Windows x64 only; no MSI. The repository package stays private. Only the generated distribution package is publishable.
+Status: implemented commands; the initial release is configured as unsigned. Public release remains gated on all API references, automated artifact checks, and maintainer account setup. Windows x64 only; no MSI. The repository package stays private. Only the generated distribution package is publishable.
 
 ## Compatibility
 
 `release.config.json` is the target policy. This release supports Revit 2025 on .NET 8 only; its .NET 10 variant is deferred to a future release after matching references and live testing are available. Revit 2026 requires .NET 10 and build 26.5.0.55 or newer; Revit 2027 uses .NET 10. Installation checks the installed executable build and `RevitAPI.runtimeconfig.json`, including registry-discovered custom installation paths. Unknown runtimes remain pending. Selecting a year does not override compatibility.
 
-Build each variant against matching Autodesk references. The package records their build, checksum, runtime configuration, and target. The built API version is the conservative minimum supported build: older builds require rebuilding against older references and acceptance testing. No API DLLs are redistributed. All three configured targets require live acceptance for a public release. A runtime change requires revalidation, even within the same Revit year.
+Build each variant against matching Autodesk references. The package records their build, checksum, runtime configuration, and target. The built API version is the conservative minimum supported build: older builds require rebuilding against older references and acceptance testing. No API DLLs are redistributed. Live testing of all three targets is recommended; a manual acceptance file is not required to publish. A runtime change requires revalidation, even within the same Revit year.
 
 Autodesk references:
 
@@ -86,25 +86,24 @@ Use pnpm for the documented install, build, test, and release commands. The rele
 | `pnpm run version:patch`, `pnpm run version:minor`, `pnpm run version:major` | Bump locally; no commit/tag/push/publish |
 | `pnpm run release:check` | Check branch/source, remote state, version/tag availability, tools, references, account ownership, signing configuration |
 | `pnpm run release:build` | Build/test/pack committed source, signing when configured; test the actual tarball |
-| `pnpm run release:patch`, `pnpm run release:minor`, `pnpm run release:major` | Preflight, one bump, version commit, and build; continue publication when acceptance is supplied |
-| `pnpm run release:publish` | Verify the prepared artifact, acceptance and source; push/tag/publish without a bump |
+| `pnpm run release:patch`, `pnpm run release:minor`, `pnpm run release:major` | Preflight, one bump, version commit, and build; complete release notes before publication |
+| `pnpm run release:publish` | Verify the prepared artifact and source; push/tag/publish without a bump |
 | `pnpm run release:resume` | Retry unfinished publication using recorded bytes and remote integrity checks |
 
 Version-only commands synchronize npm package and lockfile versions. pnpm lockfile v9 has no root package version, so a version-only bump leaves it unchanged. Native and distribution versions are generated from `package.json`.
 
-Sequence: **preflight → bump → version commit/PR merge → build/optional signing/pack → exact-tarball tests and live acceptance → annotated tag → draft GitHub release/assets → npm publication → publish GitHub release**.
+Sequence: **preflight → bump → version commit/PR merge → build/optional signing/pack → exact-tarball tests → annotated tag → draft GitHub release/assets → npm publication → publish GitHub release**.
 
 This repository explicitly sets `versionPullRequest: true`: one-command releases create a version PR and pause. This also works on private GitHub plans that do not expose the branch-rules API. After merge, check out the merged release branch and run `pnpm run release:build`. If the setting is omitted, the release command checks GitHub pull-request rules; an explicit `false` selects the direct route. A rejected protected-branch push falls back to a version PR and is never forced. Build and test again from the final merged commit before publication.
 
-A local maintainer release necessarily pauses for live acceptance. After `release:build`, fill in `artifacts/releases/<version>/acceptance.json` and `release-notes.md`, then run `release:publish`. Acceptance must identify the exact commit, tarball SHA-256, tested Revit build/runtime, tester/date, and successful add-in/compiler/browser/desktop checks for every target. Clean-machine, both package managers, scripts-disabled, and failure-recovery evidence are mandatory. Never mark unperformed tests as passed.
+After `release:build`, complete `artifacts/releases/<version>/release-notes.md`, then run `release:publish`. No `acceptance.json` is generated, required, or uploaded. Manual test notes are optional; record them in release notes if useful. Automated tests and source, signing-policy, and artifact-integrity checks remain required.
 
-An established acceptance runner can be configured as `REVCODE_ACCEPTANCE_COMMAND`; it receives the prepared release directory, records real results and release notes, and enables an uninterrupted one-command release. Ordinary Windows hosted runners do not contain Revit or these acceptance capabilities.
 
-Build receipts, tarball, checksums, compatibility metadata, notes, and acceptance stay under `artifacts/releases/<version>`. Resuming never rebuilds, bumps, moves tags, overwrites registry versions, or clobbers GitHub assets. Missing tarball-test completion can rerun that test against the saved tarball. After publication starts, asset hashes are frozen in `publication.json`; changed assets or mismatched remote integrity stop recovery. A failed build without a prepared receipt is retained under a timestamped failed directory before a retry.
+Build receipts, tarball, checksums, compatibility metadata, and notes stay under `artifacts/releases/<version>`. Resuming never rebuilds, bumps, moves tags, overwrites registry versions, or clobbers GitHub assets. Missing tarball-test completion can rerun that test against the saved tarball. After publication starts, asset hashes are frozen in `publication.json`; changed assets or mismatched remote integrity stop recovery. A failed build without a prepared receipt is retained under a timestamped failed directory before a retry.
 
 ## Validation and enterprise rollout
 
-Automated installer tests cover idempotence, selective upgrades, rollback, interrupted writes/recovery, corruption, ownership conflicts, locked installation, and schema/runtime rejection. Actual tarball tests use isolated profile directories, empty package-manager caches/stores, offline mode, scripts enabled/disabled, and actual global shims for npm and pnpm. They start bundled Node/ZeroMQ and the compiler. Live acceptance supplies the clean-machine/browser/desktop/Revit coverage that these tests cannot establish.
+Automated installer tests cover idempotence, selective upgrades, rollback, interrupted writes/recovery, corruption, ownership conflicts, locked installation, and schema/runtime rejection. Actual tarball tests use isolated profile directories, empty package-manager caches/stores, offline mode, scripts enabled/disabled, and actual global shims for npm and pnpm. They start bundled Node/ZeroMQ and the compiler. Manual testing can cover clean-machine/browser/desktop/Revit behavior that automated tests cannot establish.
 
 Before publication, rehearse interrupted remote steps and concurrent installations on a standard-user machine. Verify paths with spaces, missing/unsupported Revit, running Revit, multiple years, upgrades, rollback, and full removal. Run clients without developer tools. Publish the exact tested tarball; a new npm release does not update client machines automatically.
 

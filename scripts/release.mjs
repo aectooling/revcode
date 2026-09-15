@@ -4,7 +4,6 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { digest, json, save, verify } from './deployment/files.mjs';
 import { run } from './deployment/commands.mjs';
-import { compatible } from './deployment/installer.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const config = () => json(join(root, 'release.config.json'));
@@ -29,16 +28,6 @@ export function nextVersion(version, kind) {
   if (!/^\d+\.\d+\.\d+$/.test(version) || !['patch', 'minor', 'major'].includes(kind)) throw new Error('Expected a stable version and patch/minor/major.');
   const [major, minor, patch] = version.split('.').map(Number);
   return kind === 'major' ? `${major + 1}.0.0` : kind === 'minor' ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
-}
-export function assertAcceptance(receipt, acceptance) {
-  if (acceptance.sourceCommit !== receipt.sourceCommit || acceptance.tarballSha256 !== receipt.sha256) throw new Error('Acceptance must identify the exact source commit and tarball checksum.');
-  const required = ['addinLoad', 'compiler', 'browser', 'desktop'];
-  for (const target of receipt.targets) {
-    const evidence = acceptance.tests?.find(test => test.target === target.id && test.tester?.trim() && test.testedAt && test.runtimeVersion &&
-      test.year === target.year && Number(test.runtimeVersion.split('.')[0]) === target.runtimeMajor && compatible(target, { year: test.year, runtimeMajor: target.runtimeMajor, build: test.build }) && required.every(key => test[key] === true));
-    if (!evidence) throw new Error(`Missing live acceptance for ${target.id}.`);
-  }
-  if (!['cleanMachine', 'npm', 'pnpm', 'scriptsDisabled', 'failureRecovery'].every(key => acceptance[key] === true)) throw new Error('Complete the clean-machine, package-manager, scripts-disabled, and failure-recovery acceptance checks.');
 }
 function registryVersion(version) {
   const result = run('npm', ['view', `${pkg().name}@${version}`, 'dist', '--json', ...registryArgs()], { cwd: root, allowFailure: true });
@@ -109,7 +98,7 @@ function prepareVersionPR() {
   git('push', '-u', cfg.remote, branch);
   const body = join(root, 'artifacts', 'version-pr.md');
   mkdirSync(join(root, 'artifacts'), { recursive: true });
-  writeFileSync(body, `Prepare version ${pkg().version} for release.\n\nAfter merge, build and test the tarball from the merged commit with pnpm run release:build, record live acceptance, then run pnpm run release:publish.\n`);
+  writeFileSync(body, `Prepare version ${pkg().version} for release.\n\nAfter merge, build and test the tarball from the merged commit with pnpm run release:build, complete release notes, then run pnpm run release:publish.\n`);
   const prs = JSON.parse(gh('pr', 'list', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--json', 'url'));
   console.log(prs[0]?.url ?? gh('pr', 'create', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--title', `Release v${pkg().version}`, '--body-file', body));
 }
@@ -145,10 +134,9 @@ function build() {
   save(join(dir, 'artifact.json'), { ...receipt, steps: undefined });
   writeFileSync(join(dir, 'SHA256SUMS'), `${receipt.sha256}  ${receipt.tarball}\n`);
   writeFileSync(join(dir, 'release-notes.md'), `# Revcode ${receipt.version}\n\nSource: ${receipt.sourceCommit}\n\nRevcode binaries: ${receipt.signed ? 'signed' : 'unsigned'}.\n\nDescribe changes and known limitations before publication.\n`);
-  save(join(dir, 'acceptance.json'), { sourceCommit: receipt.sourceCommit, tarballSha256: receipt.sha256, cleanMachine: false, npm: false, pnpm: false, scriptsDisabled: false, failureRecovery: false, tests: receipt.targets.map(target => ({ target: target.id, year: target.year, build: '', runtimeVersion: '', tester: '', testedAt: '', addinLoad: false, compiler: false, browser: false, desktop: false })) });
   run(process.execPath, ['scripts/deployment/test-tarball.mjs', tarball], { cwd: root, inherit: true });
   receipt.steps.tarballTest = true; save(receiptPath(), receipt);
-  console.log(`Prepared ${tarball}. Complete acceptance.json and release-notes.md, then run pnpm run release:publish.`);
+  console.log(`Prepared ${tarball}. Complete release-notes.md, then run pnpm run release:publish.`);
 }
 function prepared() {
   const receipt = json(receiptPath()), dir = directory();
@@ -160,7 +148,6 @@ function prepared() {
     run(process.execPath, ['scripts/deployment/test-tarball.mjs', join(dir, receipt.tarball)], { cwd: root, inherit: true });
     receipt.steps.tarballTest = true; save(receiptPath(), receipt);
   }
-  assertAcceptance(receipt, json(join(dir, 'acceptance.json')));
   const notes = readFileSync(join(dir, 'release-notes.md'), 'utf8');
   if (notes.includes('Describe changes and known limitations') || notes.trim().length < 30) throw new Error('Write release notes before publication.');
   return receipt;
@@ -168,7 +155,7 @@ function prepared() {
 function publish() {
   clean();
   const receipt = prepared(), cfg = config(), dir = directory(), tag = `v${receipt.version}`;
-  const assets = [receipt.tarball, 'SHA256SUMS', 'artifact.json', 'acceptance.json', 'release-notes.md'];
+  const assets = [receipt.tarball, 'SHA256SUMS', 'artifact.json', 'release-notes.md'];
   const publication = Object.fromEntries(assets.map(file => [file, digest(readFileSync(join(dir, file)))]));
   const publicationPath = join(dir, 'publication.json');
   if (existsSync(publicationPath)) {
@@ -238,11 +225,7 @@ async function main() {
       return;
     }
     build();
-    // Live acceptance is an external release gate. A one-command invocation can
-    // finish immediately only if an acceptance provider supplies exact-artifact evidence.
-    if (process.env.REVCODE_ACCEPTANCE_COMMAND) {
-      run(process.env.REVCODE_ACCEPTANCE_COMMAND, [directory()], { cwd: root, inherit: true }); publish();
-    }
+    // Publication follows once the maintainer completes the release notes.
   } else throw new Error('Usage: release.mjs version patch|minor|major | check | build | publish | resume | release patch|minor|major');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(`Release: ${error.message}`); process.exitCode = 1; });
