@@ -4,9 +4,9 @@ Status: implemented commands; the initial release is configured as unsigned. Pub
 
 ## Compatibility
 
-`release.config.json` is the target policy. Revit 2025 retains both .NET 8 and .NET 10 variants. Revit 2026 requires .NET 10 and build 26.5.0.55 or newer; Revit 2027 uses .NET 10. Installation checks the installed executable build and `RevitAPI.runtimeconfig.json`, including registry-discovered custom installation paths. Unknown runtimes remain pending. Selecting a year does not override compatibility.
+`release.config.json` is the target policy. This release supports Revit 2025 on .NET 8 only; its .NET 10 variant is deferred to a future release after matching references and live testing are available. Revit 2026 requires .NET 10 and build 26.5.0.55 or newer; Revit 2027 uses .NET 10. Installation checks the installed executable build and `RevitAPI.runtimeconfig.json`, including registry-discovered custom installation paths. Unknown runtimes remain pending. Selecting a year does not override compatibility.
 
-Build each variant against matching Autodesk references. The package records their build, checksum, runtime configuration, and target. The built API version is the conservative minimum supported build: older builds require rebuilding against older references and acceptance testing. No API DLLs are redistributed. All four runtime variants require live acceptance for a public release. A runtime change requires revalidation, even within the same Revit year.
+Build each variant against matching Autodesk references. The package records their build, checksum, runtime configuration, and target. The built API version is the conservative minimum supported build: older builds require rebuilding against older references and acceptance testing. No API DLLs are redistributed. All three configured targets require live acceptance for a public release. A runtime change requires revalidation, even within the same Revit year.
 
 Autodesk references:
 
@@ -58,7 +58,6 @@ Reference overrides use these environment variables (paths can contain spaces):
 
 ```powershell
 $env:REVCODE_REVIT_2025_NET8_DIR = 'C:\references\2025-net8'
-$env:REVCODE_REVIT_2025_NET10_DIR = 'C:\references\2025-net10'
 $env:REVCODE_REVIT_2026_NET10_DIR = 'C:\references\2026.5'
 $env:REVCODE_REVIT_2027_NET10_DIR = 'C:\references\2027'
 
