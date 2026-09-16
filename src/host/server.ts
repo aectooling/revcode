@@ -5,8 +5,15 @@ import {
   type ServerResponse,
 } from "node:http";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { resolve, extname, sep } from "node:path";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  writeFile,
+} from "node:fs/promises";
+import { resolve, extname, sep, relative, isAbsolute } from "node:path";
 import type {
   Agent,
   AuthState,
@@ -33,6 +40,12 @@ const statuses = new Set([
   ...terminal,
   "unknown",
 ]);
+function matchesSecret(value: unknown, secret: string): boolean {
+  if (typeof value !== "string") return false;
+  const actual = Buffer.from(value);
+  const expected = Buffer.from(secret);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
 class HttpError extends Error {
   constructor(
     public status: number,
@@ -208,7 +221,6 @@ export async function createHost(options: HostOptions) {
     | {
         id: string;
         resolve: (value: string) => void;
-        reject: (error: Error) => void;
       }
     | undefined;
   const router = new Router({ linger: 0, maxMessageSize: 1024 * 1024 });
@@ -469,13 +481,6 @@ export async function createHost(options: HostOptions) {
       throw new HttpError(400, "Expected JSON object.");
     }
   };
-  const authorized = (req: IncomingMessage, token: string) => {
-    const actual = Buffer.from(req.headers.authorization ?? "");
-    const expected = Buffer.from(`Bearer ${token}`);
-    return (
-      actual.length === expected.length && timingSafeEqual(actual, expected)
-    );
-  };
   const dedup = (data: any) => {
     if (
       typeof data.requestId !== "string" ||
@@ -483,7 +488,9 @@ export async function createHost(options: HostOptions) {
     )
       throw new HttpError(400, "A stable requestId is required.");
     const fingerprint = JSON.stringify(data);
-    const old = state.requests[data.requestId];
+    const old = Object.hasOwn(state.requests, data.requestId)
+      ? state.requests[data.requestId]
+      : undefined;
     if (old && old.fingerprint !== fingerprint)
       throw new HttpError(
         409,
@@ -508,7 +515,8 @@ export async function createHost(options: HostOptions) {
         !Array.isArray(data.steps) ||
         data.steps.length > 20 ||
         data.steps.some(
-          (s: any) => typeof s.name !== "string" || typeof s.code !== "string",
+          (s: any) =>
+            !s || typeof s.name !== "string" || typeof s.code !== "string",
         ) ||
         typeof data.verify !== "string" ||
         typeof data.documentToken !== "string" ||
@@ -598,6 +606,7 @@ export async function createHost(options: HostOptions) {
           data.models.length > 50 ||
           data.models.some(
             (m: any) =>
+              !m ||
               typeof m.id !== "string" ||
               !m.id.trim() ||
               m.id.length > 200 ||
@@ -742,7 +751,6 @@ export async function createHost(options: HostOptions) {
                   signal.removeEventListener("abort", cancel);
                   resolve(value);
                 },
-                reject,
               };
               if (signal.aborted) cancel();
             });
@@ -1290,9 +1298,10 @@ export async function createHost(options: HostOptions) {
         throw new HttpError(403, "Invalid Host.");
       if (req.headers.origin && req.headers.origin !== url)
         throw new HttpError(403, "Invalid Origin.");
-      const path = new URL(req.url ?? "/", url).pathname;
+      const requestUrl = new URL(req.url ?? "/", url);
+      const path = requestUrl.pathname;
       if (path.startsWith("/api/")) {
-        if (!authorized(req, browserToken))
+        if (!matchesSecret(req.headers.authorization, `Bearer ${browserToken}`))
           throw new HttpError(401, "Unauthorized.");
         if (req.method === "GET" && path === "/api/state") {
           send(res, 200, snapshot());
@@ -1325,7 +1334,7 @@ export async function createHost(options: HostOptions) {
           return;
         }
         if (req.method === "GET" && path === "/api/runs") {
-          const query = new URL(req.url!, url).searchParams;
+          const query = requestUrl.searchParams;
           try {
             send(
               res,
@@ -1373,7 +1382,7 @@ export async function createHost(options: HostOptions) {
           return;
         }
         if (req.method === "GET" && path === "/api/history/legacy") {
-          const query = new URL(req.url!, url).searchParams;
+          const query = requestUrl.searchParams;
           const records = state.operations.filter((o) => !o.runId);
           const before = Number(query.get("before") ?? records.length);
           send(res, 200, {
@@ -1447,7 +1456,23 @@ export async function createHost(options: HostOptions) {
       );
       if (!file.startsWith(root + sep))
         throw new HttpError(403, "Invalid path.");
-      const content = await readFile(file).catch(() => {
+      const [realRoot, realFile] = await Promise.all([
+        realpath(root),
+        realpath(file),
+      ]).catch(() => {
+        throw new HttpError(404, "UI asset not found. Run npm run build.");
+      });
+      // Static assets are public. A junction/symlink must not expose files outside
+      // the installed web directory. Read the resolved target after checking it.
+      const assetPath = relative(realRoot, realFile);
+      if (
+        !assetPath ||
+        assetPath === ".." ||
+        assetPath.startsWith(".." + sep) ||
+        isAbsolute(assetPath)
+      )
+        throw new HttpError(403, "Invalid path.");
+      const content = await readFile(realFile).catch(() => {
         throw new HttpError(404, "UI asset not found. Run npm run build.");
       });
       const types: Record<string, string> = {
@@ -1486,14 +1511,7 @@ export async function createHost(options: HostOptions) {
         const [route, frame] = frames;
         try {
           const envelope = JSON.parse(frame!.toString());
-          if (typeof envelope.token !== "string") continue;
-          const received = Buffer.from(envelope.token),
-            expected = Buffer.from(options.nativeToken);
-          if (
-            received.length !== expected.length ||
-            !timingSafeEqual(received, expected)
-          )
-            continue;
+          if (!matchesSecret(envelope.token, options.nativeToken)) continue;
           const data = envelope.payload;
           const work = mutationChain.then(async () => {
             if (envelope.type === "context") {

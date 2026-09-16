@@ -202,6 +202,13 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.message));
+const manualHistory = page.locator("details").filter({ has: page.locator("summary").filter({ hasText: /^Manual console$/ }) });
+const manualOperations = manualHistory.locator("section");
+async function openManualHistory() {
+  await expect(manualHistory).toBeVisible();
+  if (await manualHistory.getAttribute("open") === null)
+    await manualHistory.locator("summary").click();
+}
 try {
   await page.goto(host.url);
   await expect(
@@ -213,8 +220,9 @@ try {
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Screenshot', exact: true })).toHaveCount(0);
   await expect(page.getByText(/^Desktop:/)).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Agent tools' }).getByRole('listitem')).toHaveCount(4);
-  await expect(page.getByText('revit_ui_action', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Agent tools' }).getByRole('listitem')).toHaveText([
+    /Execute Revit C#/, /Capture a view/, /Observe desktop/, /Control desktop/, /Author skills/,
+  ]);
   await expect(page).toHaveURL(`${host.url}/`);
   await page.getByRole("link", { name: "Skip to message" }).focus();
   await page.keyboard.press("Enter");
@@ -246,12 +254,12 @@ try {
   await expect(page.getByRole("button", { name: "Run C#" })).toBeEnabled();
   await page.locator("#code").press("Control+Enter");
   await page.getByRole("button", { name: "Close", exact: true }).click();
-  await page.locator("summary").filter({ hasText: /^Manual console$/ }).click();
-  await expect(page.getByText("succeeded", { exact: true })).toBeVisible();
-  await expect(page.locator(".operation")).toHaveCount(1);
+  await openManualHistory();
+  await expect(manualHistory.getByRole("heading", { name: "Execute Revit C# · succeeded", exact: true })).toBeVisible();
+  await expect(manualOperations).toHaveCount(1);
   expect(lastCommand.documentToken).toBe("other-doc");
   await page.reload();
-  await expect(page.locator(".operation")).toHaveCount(1);
+  await expect(manualOperations).toHaveCount(1);
   expect(commandCount).toBe(1);
   context.document.isReadOnly = false;
   await send("context", context);
@@ -265,12 +273,9 @@ try {
   await page.getByLabel("Target document").selectOption("other-doc");
   await page.getByRole("button", { name: "Run C#" }).click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
-  await page.locator("summary").filter({ hasText: /^Manual console$/ }).click();
-  await expect(
-    page.getByText("Intentional rollback test. No level should remain.", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  await openManualHistory();
+  await expect(manualOperations.filter({ has: page.getByRole("heading", { name: "Execute Revit C# · failed", exact: true }) }))
+    .toContainText('"error": "Intentional rollback test. No level should remain."');
   await expect(page.getByText(/Transaction: RolledBack/)).toBeVisible();
   await page.locator(".console-button").click();
 
@@ -282,9 +287,11 @@ try {
     page.getByRole("button", { name: "Stop", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "Stop", exact: true }).click();
-  await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
+  await expect.poll(() => host.snapshot().operations.at(-1)?.status).toBe("cancelled");
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await openManualHistory();
+  await expect(manualHistory.getByRole("heading", { name: "Execute Revit C# · cancelled", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /Set up a provider/ }).click();
   await expect(

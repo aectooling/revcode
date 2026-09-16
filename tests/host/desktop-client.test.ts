@@ -56,6 +56,21 @@ it('Stop reaches the helper while an observation response is pending', async () 
   expect(await capture).toEqual({ observationId: 'image' });
 });
 
+it('rejects duplicate pending request IDs without dispatching or losing the original waiter', async () => {
+  const f = setup(); await f.client.request('start'); f.hold();
+  const capture = f.client.request('observe', {}, 'same-request');
+  const captureResult = capture.catch(error => error);
+  await expect.poll(() => f.requests.some(r => r.requestId === 'same-request')).toBe(true);
+  // Attach handlers before assertions so a regression cannot leave dangling rejections.
+  const duplicate = f.client.request('observe', {}, 'same-request');
+  const duplicateResult = duplicate.catch(error => error);
+  await Promise.resolve();
+  f.respond(f.requests.find(r => r.requestId === 'same-request'), { observationId: 'original' });
+  expect(await duplicateResult).toBeInstanceOf(DesktopRequestError);
+  expect(await captureResult).toEqual({ observationId: 'original' });
+  expect(f.requests.filter(r => r.requestId === 'same-request')).toHaveLength(1);
+});
+
 it('distinguishes a confirmed helper rejection from a transport failure', async () => {
   const fixture = setup();
   await expect(fixture.client.request('action', { action: 'click' })).rejects.toBeInstanceOf(DesktopRequestError);

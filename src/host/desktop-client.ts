@@ -80,6 +80,7 @@ export class DesktopClient implements DesktopTransport {
   private send(kind: string, input: object, requestId: string = randomUUID()): Promise<unknown> {
     if (this.failure) return Promise.reject(this.failure);
     if (!this.child) return Promise.reject(new Error('Desktop helper has not started.'));
+    if (this.pending.has(requestId)) return Promise.reject(new DesktopRequestError('Desktop request ID is already pending.'));
     const line = JSON.stringify({ ...input, version: 1, requestId, generation: this.generation, kind });
     if (Buffer.byteLength(line) > 16384 || this.pending.size >= 6) return Promise.reject(new DesktopRequestError('Desktop request limit exceeded.'));
     return new Promise((resolve, reject) => {
