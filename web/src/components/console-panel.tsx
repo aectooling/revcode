@@ -1,9 +1,10 @@
 import { Box, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
+import type { ExecuteInput } from "../../../src/host/types";
 import { HighlightedTextarea } from "./highlighted-textarea";
 import { Button } from "./ui/button";
 
-export type Mode = "query" | "modify" | "api" | "batch";
+export type Mode = ExecuteInput["mode"];
 
 export const examples: { label: string; mode: Mode; code: string }[] = [
   {

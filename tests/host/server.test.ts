@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Dealer } from "zeromq";
@@ -129,6 +129,38 @@ async function setup(
 }
 
 describe("authenticated Revit host", () => {
+  it("rejects null custom-provider models before calling the provider SDK", async () => {
+    const addProvider = vi.fn();
+    const { api } = await setup({ addProvider });
+    expect((await api("auth/provider", {
+      id: "custom-test", baseUrl: "http://localhost:9999/v1", models: [null],
+    })).status).toBe(400);
+    expect(addProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not serve assets through a link outside the web directory", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "revcode-private-"));
+    resources.push(() => rm(outside, { recursive: true, force: true }));
+    await writeFile(join(outside, "secret.txt"), "private fixture");
+    const { host, dir } = await setup();
+    await writeFile(join(dir, "index.html"), "public fixture");
+    await symlink(outside, join(dir, "linked"), process.platform === "win32" ? "junction" : "dir");
+    const response = await fetch(host.url + "/linked/secret.txt");
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("private fixture");
+    expect(await (await fetch(host.url + "/")).text()).toBe("public fixture");
+  });
+
+  it("accepts and deduplicates request IDs that match inherited object properties", async () => {
+    const { api, host } = await setup();
+    const input = { requestId: "constructor", code: "return 1;", mode: "query" };
+    const accepted = await api("execute", input);
+    expect(accepted.status).toBe(202);
+    expect(await (await api("execute", input)).json()).toEqual(await accepted.json());
+    expect(host.snapshot().operations).toHaveLength(1);
+    expect((await api("execute", { ...input, code: "return 2;" })).status).toBe(409);
+  });
+
   it("migrates old history losslessly without guessed run links or repeated payload rewrites", async () => {
     const dir = await mkdtemp(join(tmpdir(), "revcode-migration-"));
     resources.push(() => rm(dir, { recursive: true, force: true }));
@@ -379,6 +411,8 @@ describe("authenticated Revit host", () => {
     expect((await api("console-draft", { ...draft, code: 42 })).status).toBe(
       400,
     );
+    expect((await api("console-draft", { ...draft, steps: [null] })).status).toBe(400);
+    expect(await (await api("console-draft")).json()).toEqual({ draft });
     expect(await readFile(join(dir, "console-draft.json"), "utf8")).toContain(
       "return 42;",
     );

@@ -2,31 +2,7 @@ import { toolLabel } from "../lib/tool-label";
 import { ChevronDown, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, ArrowUpRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HighlightedCode } from "./highlighted-code";
-export type Operation = {
-  operationId: string;
-  runId?: string;
-  executionMode?: string;
-  toolCallId?: string;
-  code?: string;
-  verify?: { code: string };
-  steps?: { name: string; code: string }[];
-  mode: "query" | "modify" | "api" | "batch";
-  status: string;
-  createdAt: string;
-  result?: unknown;
-  error?: string;
-  logs?: string[];
-  transactionStatus?: string;
-  elapsedMs?: number;
-  diagnostics?: {
-    stepName?: string;
-    stepIndex?: number;
-    severity: string;
-    message: string;
-    line?: number;
-    column?: number;
-  }[];
-};
+export type Operation = import("../../../src/host/types").Operation;
 
 function ExecutionResult({ result, error }: { result?: unknown; error?: string }) {
   const value = error ? (result === undefined ? { error } : { error, result }) : result;
@@ -38,6 +14,7 @@ function OperationList({ operations }: { operations: Operation[] }) {
   return <div className="min-w-0 divide-y divide-line">
     {operations.map(operation => <section key={operation.operationId} className="min-w-0 py-2">
       <h3 className="truncate text-xs font-medium">Execute Revit C# · {operation.status}</h3>
+      {operation.transactionStatus && <p className="mt-1 text-xs text-muted">Transaction: {operation.transactionStatus}</p>}
       <ToolCode argumentsValue={operation} />
       <ExecutionResult result={operation.result} error={operation.error} />
     </section>)}
