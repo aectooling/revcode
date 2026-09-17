@@ -1,6 +1,6 @@
 {
   "name": "@aectooling/revcode",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "A local Pi-powered coding assistant for Autodesk Revit",
