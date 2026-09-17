@@ -60,6 +60,18 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     expect(result.status, result.diagnostics).toBe(1);
   }, 65_000);
 
+  it("enables same-version replacement for local build:install", () => {
+    writeFileSync(join(root, "scripts", "install.ps1"), `
+param([string]$PackagePath, [switch]$ReplaceSameVersion)
+if (-not $ReplaceSameVersion) { throw 'Expected automatic local replacement' }
+Set-Content (Join-Path $PackagePath 'installed.txt') 'replacement enabled'
+`);
+    const result = run();
+    expect(result.status, result.diagnostics).toBe(0);
+    const [stage] = readdirSync(join(root, "artifacts"));
+    expect(readFileSync(join(root, "artifacts", stage, "installed.txt"), "utf8")).toContain("replacement enabled");
+  }, 65_000);
+
   it("propagates packaging failures", () => {
     writeFileSync(join(root, "scripts", "package.ps1"), "throw 'Packaging test failure'");
     const result = run("build-only");
