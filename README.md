@@ -1,6 +1,15 @@
 # Revcode
 
-[Release notes: 0.1.2](docs/releases/0.1.2.md)
+[Release notes: 0.1.3](docs/releases/0.1.3.md)
+
+0.1.3 fixes Windows installation failures reporting `ExtractToDirectory: Illegal characters in path` during `cli.mjs postinstall`.
+
+After 0.1.3 is published, close Revit and install or upgrade from PowerShell:
+
+```powershell
+npm install -g --allow-scripts=@aectooling/revcode @aectooling/revcode@0.1.3
+revcode install
+```
 
 A local, Pi-powered coding assistant for Revit. Click **Revcode** in Revit to open a browser workspace, chat about the active model, or run C# directly. The agent uses `revit_execute_csharp` for modeling, `revit_capture_view` for API view images, and `revit_ui_observe` / `revit_ui_action` for experimental desktop interaction.
 

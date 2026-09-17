@@ -102,7 +102,7 @@ function prepareVersionPR() {
   const prs = JSON.parse(gh('pr', 'list', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--json', 'url'));
   console.log(prs[0]?.url ?? gh('pr', 'create', '--repo', cfg.repository, '--base', cfg.branch, '--head', branch, '--title', `Release v${pkg().version}`, '--body-file', body));
 }
-function build() {
+function build(skipTests = false) {
   clean(); tools();
   const dir = directory();
   if (existsSync(dir)) {
@@ -114,14 +114,16 @@ function build() {
   }
   mkdirSync(dir, { recursive: true });
   run('npm', ['ci'], { cwd: root, inherit: true });
-  run('npm', ['run', 'check'], { cwd: root, inherit: true });
-  run('npm', ['run', 'test:native'], { cwd: root, inherit: true });
-  run('npm', ['run', 'test:transport'], { cwd: root, inherit: true });
-  run('npm', ['run', 'test:deployment'], { cwd: root, inherit: true });
+  if (!skipTests) {
+    run('npm', ['run', 'check'], { cwd: root, inherit: true });
+    run('npm', ['run', 'test:native'], { cwd: root, inherit: true });
+    run('npm', ['run', 'test:transport'], { cwd: root, inherit: true });
+    run('npm', ['run', 'test:deployment'], { cwd: root, inherit: true });
+  }
   const payload = join(dir, 'payload');
   // Invoke in PowerShell with environment data rather than interpolated shell arguments.
-  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:REVCODE_PACKAGE_SCRIPT -RevitYears 2025,2026,2027 -RequireAllTargets -Sign:($env:REVCODE_RELEASE_SIGN -eq "true") -OutputDirectory $env:REVCODE_PACKAGE_OUTPUT; if (-not $?) { exit 1 }'], {
-    cwd: root, env: { REVCODE_PACKAGE_SCRIPT: join(root, 'scripts', 'package.ps1'), REVCODE_PACKAGE_OUTPUT: payload, REVCODE_RELEASE_SIGN: String(requiresSigning(config())) }, inherit: true,
+  run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '& $env:REVCODE_PACKAGE_SCRIPT -RevitYears 2025,2026,2027 -RequireAllTargets -Sign:($env:REVCODE_RELEASE_SIGN -eq "true") -SkipTests:($env:REVCODE_RELEASE_SKIP_TESTS -eq "true") -OutputDirectory $env:REVCODE_PACKAGE_OUTPUT; if (-not $?) { exit 1 }'], {
+    cwd: root, env: { REVCODE_PACKAGE_SCRIPT: join(root, 'scripts', 'package.ps1'), REVCODE_PACKAGE_OUTPUT: payload, REVCODE_RELEASE_SIGN: String(requiresSigning(config())), REVCODE_RELEASE_SKIP_TESTS: String(skipTests) }, inherit: true,
   });
   const info = verify(payload);
   assertSigning(config(), info);
@@ -130,12 +132,15 @@ function build() {
   if (!packed?.filename) throw new Error('npm pack did not report a tarball.');
   const tarball = join(dir, packed.filename), bytes = readFileSync(tarball);
   const receipt = { version: info.version, sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'), tarball: basename(tarball), sha256: digest(bytes), integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`, targets: info.targets, signed: info.signed, steps: {} };
+  if (skipTests) receipt.testsSkipped = { reason: 'Maintainer requested --skip-tests during release preparation.' };
   save(receiptPath(), receipt);
   save(join(dir, 'artifact.json'), { ...receipt, steps: undefined });
   writeFileSync(join(dir, 'SHA256SUMS'), `${receipt.sha256}  ${receipt.tarball}\n`);
   writeFileSync(join(dir, 'release-notes.md'), `# Revcode ${receipt.version}\n\nSource: ${receipt.sourceCommit}\n\nRevcode binaries: ${receipt.signed ? 'signed' : 'unsigned'}.\n\nDescribe changes and known limitations before publication.\n`);
-  run(process.execPath, ['scripts/deployment/test-tarball.mjs', tarball], { cwd: root, inherit: true });
-  receipt.steps.tarballTest = true; save(receiptPath(), receipt);
+  if (!skipTests) {
+    run(process.execPath, ['scripts/deployment/test-tarball.mjs', tarball], { cwd: root, inherit: true });
+    receipt.steps.tarballTest = true; save(receiptPath(), receipt);
+  }
   console.log(`Prepared ${tarball}. Complete release-notes.md, then run pnpm run release:publish.`);
 }
 function prepared() {
@@ -144,7 +149,7 @@ function prepared() {
   const bytes = readFileSync(join(dir, receipt.tarball));
   if (digest(bytes) !== receipt.sha256 || `sha512-${createHash('sha512').update(bytes).digest('base64')}` !== receipt.integrity) throw new Error('Prepared tarball changed.');
   assertSigning(config(), receipt);
-  if (!receipt.steps.tarballTest) {
+  if (!receipt.steps.tarballTest && !receipt.testsSkipped?.reason) {
     run(process.execPath, ['scripts/deployment/test-tarball.mjs', join(dir, receipt.tarball)], { cwd: root, inherit: true });
     receipt.steps.tarballTest = true; save(receiptPath(), receipt);
   }
@@ -213,7 +218,10 @@ async function main() {
   const [command, kind] = process.argv.slice(2);
   if (command === 'version') bump(kind);
   else if (command === 'check') preflight();
-  else if (command === 'build') build();
+  else if (command === 'build') {
+    if (kind && kind !== '--skip-tests') throw new Error('Usage: release.mjs build [--skip-tests]');
+    build(kind === '--skip-tests');
+  }
   else if (command === 'publish' || command === 'resume') publish();
   else if (command === 'release') {
     preflight(nextVersion(pkg().version, kind)); bump(kind); commitVersion();
