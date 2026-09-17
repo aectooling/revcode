@@ -131,6 +131,7 @@ try {
     .getByRole("button", { name: /Inactive Create a skill about levels/ })
     .click();
   await expect(input).toHaveValue("Draft in first thread");
+  await expect(page.getByRole("log", { name: "Conversation" })).toHaveCount(1);
   await expect(
     page.getByText("Reply to Create a skill about levels", { exact: true }),
   ).toBeVisible();

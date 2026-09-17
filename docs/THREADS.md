@@ -8,7 +8,7 @@ Threads remain readable while another thread works. Jump back returns to the run
 
 Archive makes a conversation read-only without deleting its evidence. Unarchive restores the composer. A running thread cannot be archived. Threads are ordered by their last accepted message or completion time. Older transcript pages are available through Load earlier messages, including in archived threads.
 
-The browser remembers selection in session storage; each browser tab can browse independently. Unsent text, selected skills, and skill-authoring intent survive thread switches in the same page, but are not persisted across reloads. Console drafts continue using their existing separate recovery mechanism.
+The browser remembers selection in session storage; each browser tab can browse independently. Unsent text, image attachments and saved drawing scenes, selected skills, and skill-authoring intent survive thread switches in the same page, but are not persisted across reloads. Console drafts continue using their existing separate recovery mechanism.
 
 Journal version 3 stores thread metadata alongside existing request deduplication records. Version 1/2 history is associated with the `legacy` thread without rewriting immutable archives or inventing run associations. Messages and run summaries without a thread ID resolve to that thread. Run-detail retention limits still apply; threads do not preserve expired evidence indefinitely.
 

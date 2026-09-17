@@ -72,7 +72,8 @@ it.each(['revit_execute_csharp', 'custom_capture'])('real Pi SDK advertises both
         expect(input).toMatchObject({ mode: 'api', documentToken: 'doc' });
         const file = input.code.match(/FilePath = @"([^"]+)"/)![1];
         await writeFile(file + '.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=', 'base64'));
-      } else expect(input).toEqual({ code: 'return 7;', mode: 'query' }); return { ...input, operationId: 'op', documentToken: 'doc', createdAt: new Date().toISOString(), status: 'succeeded', result: 7 }; }, value => { output = value; });
+      } else expect(input).toEqual({ code: 'return 7;', mode: 'query' }); return { ...input, operationId: 'op', documentToken: 'doc', createdAt: new Date().toISOString(), status: 'succeeded', result: 7 }; }, value => { output = value; }, undefined, undefined, [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' }]);
+    expect(JSON.stringify(requests[0].messages)).toContain('data:image/png;base64,');
     expect(calls).toBe(1); expect(output).toContain('There are 7 levels.');
     expect(requests[0].tools.map((tool: any) => tool.function.name)).toEqual(['revit_execute_csharp', 'revit_capture_view', 'revit_ui_observe', 'revit_ui_action']);
     if (toolName === 'revit_capture_view') {

@@ -13,7 +13,7 @@ export type Operation = Omit<ExecuteInput, 'documentToken'> & {
   result?: unknown; logs?: string[]; diagnostics?: unknown[]; error?: string; transactionStatus?: string; elapsedMs?: number;
 };
 export interface Settings { provider: string; model: string; configured: boolean }
-export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string; runId?: string; threadId?: string }
+export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string; runId?: string; threadId?: string; images?: import('./images.js').StoredImage[] }
 export interface ThreadSummary {
   id: string;
   title: string;
@@ -33,6 +33,6 @@ export interface Agent {
   addProvider?(provider: CustomProvider): Promise<void>;
   configured(provider: string): boolean;
   setKey(provider: string, key: string): Promise<void>;
-  prompt(text: string, settings: Settings, context: Context, history: Message[], execute: (input: ExecuteInput, signal?: AbortSignal) => Promise<Operation>, update: (text: string) => void, desktop?: import('./desktop-types.js').DesktopTools, services?: import('./skills.js').RunServices): Promise<void>;
+  prompt(text: string, settings: Settings, context: Context, history: Message[], execute: (input: ExecuteInput, signal?: AbortSignal) => Promise<Operation>, update: (text: string) => void, desktop?: import('./desktop-types.js').DesktopTools, services?: import('./skills.js').RunServices, images?: import('./images.js').ImageAttachment[]): Promise<void>;
   abort(): Promise<void>;
 }

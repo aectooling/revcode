@@ -57,6 +57,24 @@ function detail(
   };
 }
 describe("durable run history", () => {
+  it("keeps large message images across restart and prunes them with their run", async () => {
+    const { history, dir } = await fixture();
+    const run = detail(1);
+    const bytes = Buffer.alloc(3 * 1024 * 1024, 7);
+    run.messages[0].images = await history.result([{ type: "image", mimeType: "image/png", data: bytes.toString("base64") }], run, []) as typeof run.messages[0].images;
+    await history.save(run);
+    const artifact = run.messages[0].images![0].artifact!;
+    expect(run.run.detailBytes).toBeLessThan(10000);
+    expect(run.run.artifactBytes).toBe(bytes.length);
+    const reopened = await RunHistory.open(dir);
+    expect(await reopened.image(artifact)).toEqual(bytes);
+    expect((await reopened.detail(run.run.id)).messages[0].images).toEqual(run.messages[0].images);
+    reopened.summaries.get(run.run.id)!.artifactBytes = HISTORY_LIMITS.aggregateArtifactBytes;
+    await reopened.prune();
+    await expect(reopened.image(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(reopened.list().runs[0].detailsAvailable).toBe(false);
+  });
+
   it.each(["finished", "failed"] as const)("recovers a published %s detail over a stale running summary", async (status) => {
     const { history, dir } = await fixture();
     const run = detail(1, "running");

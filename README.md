@@ -112,6 +112,10 @@ For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` ca
 
 ## Visual inspection
 
+Use the composer's **Attach images**, **New drawing**, and **Capture active view** buttons to send visual instructions. Paste or drop PNG, JPEG, WebP, or GIF files (up to four images, 5 MiB each). Click an attachment to annotate it with Excalidraw arrows, shapes, text, or freehand strokes; the image opacity slider helps trace reference images. Drawings can be reopened and edited before sending. Oversized Revit captures are resized automatically to fit the attachment limit. The editor and fonts load locally, with no external drawing service.
+
+Sending images requires an image-capable model. Attachments remain visible in recorded conversations under the existing history retention limits; reattach images when a later turn needs them. Unsent drawing scenes stay in the current browser page and are lost on reload.
+
 `revit_capture_view` returns a PNG directly to an image-capable agent model. In custom-provider setup, select each vision model under **Models that accept images**; unselected models remain text-only. For an existing custom provider, set that model’s `input` to `["text", "image"]` in the shared `models.json` and refresh providers. It accepts optional `documentToken`, `viewId` (a view UniqueId), `pixelSize` (256-2048, default 1536), `zoomType` (`fitToPage` or `zoom`), `zoom` (integer percentage), and `region` (`view` or `visible`). Without a view ID it uses the target document's active view at execution time.
 
 Export sizing follows Autodesk's [ImageExportOptions](https://help.autodesk.com/cloudhelp/2026/ENU/Revit-API-MainReference/files/html/c2e823a1-6eb0-2bf3-f07b-ed46d8f7b70a.htm):

@@ -129,6 +129,55 @@ async function setup(
 }
 
 describe("authenticated Revit host", () => {
+  const image = { type: 'image' as const, mimeType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=' };
+
+  it('passes image-only messages to the agent and retains images outside run text', async () => {
+    let finish!: () => void;
+    const prompt = vi.fn(async () => { await new Promise<void>(resolve => { finish = resolve; }); });
+    const { api, host, dir } = await setup({ prompt, providers: [{ id: 'anthropic', models: [{ id: 'test-model', name: 'Vision', supportsImages: true }] }] });
+    expect((await api('chat', { requestId: 'image-only-turn', text: '', images: [image] })).status).toBe(202);
+    await expect.poll(() => prompt.mock.calls.length).toBe(1);
+    expect((prompt.mock.calls as unknown[][])[0][8]).toEqual([image]);
+    const stored = host.snapshot().messages[0].images![0];
+    expect(stored.artifact).toBeTruthy();
+    expect(stored).not.toHaveProperty('data');
+    expect(Buffer.from(await (await api(`history/image/${stored.artifact}`)).arrayBuffer()).toString('base64')).toBe(image.data);
+    finish();
+    await expect.poll(() => host.snapshot().busy).toBe(false);
+    const run = await (await api(`runs/${host.snapshot().messages[0].runId}`)).json();
+    expect(run.messages[0].images).toEqual([stored]);
+    expect(run.run.detailBytes).toBeLessThan(10000);
+  });
+
+  it('rejects invalid images and text-only models before accepting a turn', async () => {
+    const prompt = vi.fn(async () => {});
+    const { api, host } = await setup({ prompt });
+    for (const images of [[{ ...image, data: 'bad' }], [image, image, image, image, image], [{ ...image, mimeType: 'image/svg+xml' }]]) {
+      expect((await api('chat', { requestId: 'invalid-image-input', text: 'Inspect', images })).status).toBe(400);
+    }
+    expect((await api('chat', { requestId: 'nonvision-image', text: 'Inspect', images: [image] })).status).toBe(409);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(host.snapshot().messages).toHaveLength(0);
+  });
+
+  it('captures the visible active view through the journal without blocking native results', async () => {
+    const { api, dealer, native, host } = await setup();
+    const response = api('capture-view', {});
+    const [frame] = await dealer.receive();
+    const command = JSON.parse(frame.toString()).command;
+    expect(command.code).toContain('VisibleRegionOfCurrentView');
+    expect(command.documentToken).toBe('doc-1');
+    expect(host.snapshot().busy).toBe(true);
+    const file = command.code.match(/FilePath = @"([^"]+)"/)[1];
+    await writeFile(file + '.png', Buffer.from(image.data, 'base64'));
+    await native('operation', { operationId: command.operationId, status: 'succeeded', result: { viewName: 'Level 1' } });
+    const result = await response;
+    expect(result.status).toBe(200);
+    expect((await result.json()).image).toEqual(image);
+    await expect.poll(() => host.snapshot().busy).toBe(false);
+  });
+
+
   it("migrates old history losslessly without guessed run links or repeated payload rewrites", async () => {
     const dir = await mkdtemp(join(tmpdir(), "revcode-migration-"));
     resources.push(() => rm(dir, { recursive: true, force: true }));

@@ -133,6 +133,8 @@ export class RunHistory {
         detail.missingEvidence?.includes("Recorded detail file is unavailable.")
       )
         completeReferences = false;
+      for (const message of detail.messages)
+        for (const image of message.images ?? []) if (image.artifact) referenced.add(image.artifact);
       for (const call of detail.calls)
         for (const artifact of call.artifacts ?? []) referenced.add(artifact);
     }
@@ -367,16 +369,20 @@ export class RunHistory {
       await this.atomic(this.file(run.id, "summary"), JSON.stringify(expired));
       this.summaries.set(run.id, expired);
       await rm(this.file(run.id, "detail"), { force: true });
-      for (const call of detail.calls)
-        for (const artifact of call.artifacts) {
-          const file = this.artifactFile(artifact);
-          const size = await stat(file).then(
-            (s) => s.size,
-            () => 0,
-          );
-          await rm(file, { force: true });
-          this.artifactBytes = Math.max(0, this.artifactBytes - size);
-        }
+      const artifacts = new Set([
+        ...detail.calls.flatMap(call => call.artifacts),
+        ...detail.messages.flatMap(message =>
+          (message.images ?? []).flatMap(image => image.artifact ? [image.artifact] : [])),
+      ]);
+      for (const artifact of artifacts) {
+        const file = this.artifactFile(artifact);
+        const size = await stat(file).then(
+          (s) => s.size,
+          () => 0,
+        );
+        await rm(file, { force: true });
+        this.artifactBytes = Math.max(0, this.artifactBytes - size);
+      }
     }
   }
   private artifactFile(id: string) {

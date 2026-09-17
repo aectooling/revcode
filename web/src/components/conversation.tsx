@@ -1,5 +1,5 @@
 import { ArrowDown, Loader2 } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { Message } from "../../../src/host/types";
 import { MessageMarkdown } from "./message-markdown";
 import { Button } from "./ui/button";
@@ -7,7 +7,22 @@ const SUGGESTIONS = [
   "List the levels and their elevations.",
   "Tell me about the selected elements.",
 ];
-function UserBubble({ text }: { text: string }) {
+function AttachedImage({ image, index, load }: { image: NonNullable<Message["images"]>[number]; index: number; load(id: string): Promise<Blob> }) {
+  const [url, setUrl] = useState<string>();
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true, objectUrl: string | undefined;
+    setUrl(undefined); setFailed(false);
+    if (image.artifact) void load(image.artifact).then(blob => {
+      if (active) { objectUrl = URL.createObjectURL(new Blob([blob], { type: image.mimeType ?? blob.type })); setUrl(objectUrl); }
+    }).catch(() => { if (active) setFailed(true); });
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [image.artifact, image.mimeType, load]);
+  if (image.unavailable || failed) return <p className="text-xs text-muted">{image.unavailable ?? "Attached image unavailable or expired."}</p>;
+  return url ? <img src={url} alt={`Attached image ${index + 1}`} className="mb-2 max-h-80 max-w-full rounded object-contain" /> : <span role="status">Loading attached image…</span>;
+}
+
+function UserBubble({ text, images, loadImage }: Pick<Message, "text" | "images"> & { loadImage(id: string): Promise<Blob> }) {
   return (
     <div
       className="flex justify-end animate-slide-up"
@@ -15,6 +30,7 @@ function UserBubble({ text }: { text: string }) {
     >
       <div className="min-w-0 max-w-[min(85%,560px)]">
         <div className="whitespace-pre-wrap break-words rounded-md bg-surface-muted px-3.5 py-2 text-[14px] leading-6 text-ink">
+          {images?.map((image, index) => <AttachedImage key={index} image={image} index={index} load={loadImage} />)}
           {text}
         </div>
       </div>
@@ -77,9 +93,11 @@ export function Conversation({
   configured,
   onSuggestion,
   onViewTools,
+  loadImage,
   jumpMessageId,
 }: {
   messages: Message[];
+  loadImage(id: string): Promise<Blob>;
   onViewTools?(runId: string): void;
   jumpMessageId?: string;
   busy: boolean;
@@ -151,7 +169,7 @@ export function Conversation({
               if (message.role === "user")
                 return (
                   <div key={message.id} id={`message-${message.id}`}>
-                    <UserBubble text={message.text} />
+                    <UserBubble text={message.text} images={message.images} loadImage={loadImage} />
                     {message.runId && (
                       <button
                         className="mt-1 text-xs text-accent"
