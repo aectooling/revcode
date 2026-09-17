@@ -51,6 +51,7 @@ export type RunDetail = Omit<import("../../../src/host/history-types").RunDetail
 
 type Api = <T>(path: string, body?: unknown) => Promise<T>;
 export function ExecutionHistory({
+  threadId,
   operations,
   api,
   online,
@@ -61,6 +62,7 @@ export function ExecutionHistory({
   loadImage,
   onOpenSkill,
 }: {
+  threadId?: string;
   operations: Operation[];
   api: Api;
   online: boolean;
@@ -170,6 +172,7 @@ export function ExecutionHistory({
     setLoading(true);
     try {
       const query = new URLSearchParams({
+        ...(threadId ? { threadId } : {}),
         ...(older && cursor ? { cursor } : {}),
       });
       const data = await api<{
@@ -227,7 +230,7 @@ export function ExecutionHistory({
     setQueuedRuns(undefined);
     const timer = setTimeout(() => void load(false, true), 200);
     return () => clearTimeout(timer);
-  }, [online]);
+  }, [online, threadId]);
   useEffect(() => {
     const timer = setTimeout(() => void load(), 200);
     return () => clearTimeout(timer);

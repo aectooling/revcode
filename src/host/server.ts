@@ -15,6 +15,7 @@ import type {
   Message,
   Operation,
   Settings,
+  ThreadSummary,
 } from "./types.js";
 import { Router } from "zeromq";
 import { DesktopController, type DesktopTiming } from "./desktop-controller.js";
@@ -42,6 +43,7 @@ class HttpError extends Error {
   }
 }
 interface Persisted {
+  threads?: ThreadSummary[];
   version?: number;
   messages: Message[];
   operations: Operation[];
@@ -173,7 +175,35 @@ export async function createHost(options: HostOptions) {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
-  state.version = 2;
+  state.version = 3;
+  const titleFor = (text: string) =>
+    text.trim().split(/\s+/).slice(0, 8).join(" ").slice(0, 60) || "New thread";
+  const savedRuns = [...runs.summaries.values()].sort(
+    (a, b) => a.number - b.number,
+  );
+  state.threads ??= [
+    {
+      id: "legacy",
+      title: titleFor(
+        state.messages.find((m) => m.role === "user")?.text ?? "",
+      ),
+      createdAt: savedRuns[0]?.startedAt ?? new Date().toISOString(),
+      updatedAt:
+        savedRuns.at(-1)?.endedAt ??
+        savedRuns.at(-1)?.startedAt ??
+        new Date().toISOString(),
+    },
+  ];
+  const threads = state.threads;
+  const messageThread = (m: Message) =>
+    m.threadId ??
+    (m.runId ? runs.summaries.get(m.runId)?.threadId : undefined) ??
+    "legacy";
+  const findThread = (id: unknown) => {
+    const thread = threads.find((t) => t.id === id);
+    if (!thread) throw new HttpError(404, "Thread not found.");
+    return thread;
+  };
   let activeRun: RunDetail | undefined;
   let storageError: string | undefined;
   let closing = false;
@@ -248,7 +278,7 @@ export async function createHost(options: HostOptions) {
     desktop.inFlight ||
     desktop.fenced ||
     state.operations.some((o) => !terminal.has(o.status));
-  const snapshot = () => ({
+  const snapshot = (threadId = "legacy") => ({
     instanceId: options.instanceId,
     context,
     connected: connected(),
@@ -258,10 +288,16 @@ export async function createHost(options: HostOptions) {
     auth,
     ...state,
     requests: undefined,
-    runs: runs.list({ limit: 50 }).runs,
+    selectedThreadId: threadId,
+    activeThreadId: activeRun?.run.threadId,
+    runs: runs.list({ limit: 50, threadId }).runs,
     desktop: desktop.snapshot(),
     operations: state.operations.slice(-100),
-    messages: state.messages.slice(-200),
+    messages: state.messages
+      .filter((m) => messageThread(m) === threadId)
+      .slice(-200),
+    hasOlderMessages:
+      state.messages.filter((m) => messageThread(m) === threadId).length > 200,
     settings: {
       ...state.settings,
       configured: options.agent.configured(state.settings.provider),
@@ -500,6 +536,57 @@ export async function createHost(options: HostOptions) {
     submissionEpoch: number,
   ) {
     const data = await body(req);
+    if (path === "/api/threads") {
+      if (storageError) throw new HttpError(503, storageError);
+      const { old, fingerprint } = dedup(data);
+      if (old) {
+        send(res, 200, old.response);
+        return;
+      }
+      const now = new Date().toISOString();
+      const thread: ThreadSummary = {
+        id: randomUUID(),
+        title: "New thread",
+        createdAt: now,
+        updatedAt: now,
+        documentLabel: context?.document?.title,
+      };
+      threads.push(thread);
+      state.requests[data.requestId] = { fingerprint, response: thread };
+      try {
+        await persist();
+      } catch {
+        threads.splice(threads.indexOf(thread), 1);
+        delete state.requests[data.requestId];
+        storageError =
+          "Thread could not be saved. Check the data directory and restart the host.";
+        throw new HttpError(503, storageError);
+      }
+      send(res, 200, thread);
+      broadcast();
+      return;
+    }
+    if (path === "/api/threads/archive") {
+      if (storageError) throw new HttpError(503, storageError);
+      const thread = findThread(data.threadId);
+      if (typeof data.archived !== "boolean")
+        throw new HttpError(400, "Expected archived boolean.");
+      if (activeRun?.run.threadId === thread.id)
+        throw new HttpError(409, "Stop the running thread first.");
+      const previous = thread.archivedAt;
+      thread.archivedAt = data.archived ? new Date().toISOString() : undefined;
+      try {
+        await persist();
+      } catch {
+        thread.archivedAt = previous;
+        storageError =
+          "Thread archive status could not be saved. Check the data directory and restart the host.";
+        throw new HttpError(503, storageError);
+      }
+      send(res, 200, thread);
+      broadcast();
+      return;
+    }
     if (path === "/api/console-draft") {
       if (
         data.version !== 1 ||
@@ -814,6 +901,12 @@ export async function createHost(options: HostOptions) {
         send(res, 202, old.response);
         return;
       }
+      const thread =
+        path === "/api/chat"
+          ? findThread(data.threadId ?? "legacy")
+          : undefined;
+      if (thread?.archivedAt)
+        throw new HttpError(409, "Unarchive this thread to continue.");
       const authoring =
         path === "/api/chat" &&
         (data.mode === "authoring" ||
@@ -901,7 +994,10 @@ export async function createHost(options: HostOptions) {
           )
         ) {
           const latest = [...runs.summaries.values()]
-            .filter((r) => r.intent === "work")
+            .filter(
+              (r) =>
+                r.intent === "work" && (r.threadId ?? "legacy") === thread!.id,
+            )
             .sort((a, b) => b.number - a.number)[0];
           if (!latest)
             throw new HttpError(
@@ -953,8 +1049,20 @@ export async function createHost(options: HostOptions) {
       const runId = randomUUID();
       const response = { requestId: data.requestId, runId };
       state.requests[data.requestId] = { fingerprint, response };
-      const history = [...state.messages];
+      const history = state.messages.filter(
+        (m) => messageThread(m) === thread!.id,
+      );
+      if (
+        !history.some((m) => m.role === "user") &&
+        ![...runs.summaries.values()].some(
+          (r) => (r.threadId ?? "legacy") === thread!.id,
+        )
+      )
+        thread!.title = titleFor(data.text);
+      thread!.updatedAt = new Date().toISOString();
+      thread!.documentLabel ??= context?.document?.title;
       const userMessage: Message = {
+        threadId: thread!.id,
         id: randomUUID(),
         role: "user",
         text: data.text,
@@ -962,6 +1070,7 @@ export async function createHost(options: HostOptions) {
       };
       state.messages.push(userMessage);
       const message: Message = {
+        threadId: thread!.id,
         id: randomUUID(),
         role: "assistant",
         text: "",
@@ -970,6 +1079,7 @@ export async function createHost(options: HostOptions) {
       state.messages.push(message);
       const run: RunDetail = {
         run: {
+          threadId: thread!.id,
           id: runId,
           instanceId: options.instanceId,
           number: runs.nextNumber,
@@ -1175,14 +1285,19 @@ export async function createHost(options: HostOptions) {
                 name: "history_list",
                 label: "Search recorded runs",
                 description:
-                  "Search retained runs in this host history. Run completion does not prove native success.",
+                  "Search retained runs in this thread. Run completion does not prove native success.",
                 parameters: Type.Object({
                   search: Type.Optional(Type.String()),
                   cursor: Type.Optional(Type.String()),
                 }),
                 execute: async (_id, input: any) => ({
                   content: [
-                    { type: "text", text: JSON.stringify(runs.list(input)) },
+                    {
+                      type: "text",
+                      text: JSON.stringify(
+                        runs.list({ ...input, threadId: thread!.id }),
+                      ),
+                    },
                   ],
                   details: {},
                 }),
@@ -1200,6 +1315,13 @@ export async function createHost(options: HostOptions) {
                 }),
                 execute: async (_id, input: any) => {
                   const detail = await runs.detail(input.runId);
+                  if (
+                    (detail.run.threadId ?? "legacy") !== thread!.id &&
+                    !sourceRunIds.includes(detail.run.id)
+                  )
+                    throw new Error(
+                      "Run belongs to another thread. Select it explicitly as a source to read it.",
+                    );
                   const text = JSON.stringify(detail);
                   const offset = input.offset ?? 0,
                     end = offset + (input.limit ?? 16000);
@@ -1250,6 +1372,7 @@ export async function createHost(options: HostOptions) {
               /* Helper disconnect is already fenced. */
             }
           run.run.endedAt = new Date().toISOString();
+          thread!.updatedAt = run.run.endedAt;
           for (const call of run.calls)
             if (call.status === "running") {
               call.status = "unknown";
@@ -1295,7 +1418,32 @@ export async function createHost(options: HostOptions) {
         if (!authorized(req, browserToken))
           throw new HttpError(401, "Unauthorized.");
         if (req.method === "GET" && path === "/api/state") {
-          send(res, 200, snapshot());
+          const requested = new URL(req.url!, url).searchParams.get("threadId");
+          const selected =
+            threads.find((t) => t.id === requested) ??
+            [...threads]
+              .filter((t) => !t.archivedAt)
+              .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
+            threads[0]!;
+          send(res, 200, snapshot(selected.id));
+          return;
+        }
+        if (req.method === "GET" && path === "/api/threads/messages") {
+          const query = new URL(req.url!, url).searchParams;
+          const thread = findThread(query.get("threadId"));
+          const messages = state.messages.filter(
+            (m) => messageThread(m) === thread.id,
+          );
+          const before = query.get("before");
+          const end = before
+            ? messages.findIndex((m) => m.id === before)
+            : messages.length;
+          if (end < 0)
+            throw new HttpError(400, "Message cursor no longer available.");
+          send(res, 200, {
+            messages: messages.slice(Math.max(0, end - 200), end),
+            hasOlderMessages: end > 200,
+          });
           return;
         }
         if (req.method === "GET" && path === "/api/console-draft") {
@@ -1331,6 +1479,7 @@ export async function createHost(options: HostOptions) {
               res,
               200,
               runs.list({
+                threadId: query.get("threadId") ?? undefined,
                 search: query.get("search") ?? undefined,
                 errorsOnly: query.get("errorsOnly") === "true",
                 tool: query.get("tool") ?? undefined,

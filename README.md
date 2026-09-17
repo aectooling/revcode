@@ -60,7 +60,9 @@ Existing Pi sign-ins are reused. Credentials are managed by Pi's own storage and
 
 Custom OpenAI-compatible endpoints can be added with a provider ID, API base URL, model ID(s), and optional API key. A blank key supports local endpoints that do not require authentication. Custom model definitions live in `%LOCALAPPDATA%\Revcode\user\models.json`; actual keys stay in Pi credential storage. The selected model persists across Revit launches.
 
-Browser refresh restores the current transcript and results. The tab can be closed while work continues. Reopen it using the ribbon button. Multiple Revit processes get independent hosts/tabs in this prototype. A switched or closed document cannot silently redirect an already-submitted edit.
+Use **New thread** in the sidebar to start a separate conversation. Threads have their own agent context and run history, with automatic titles and date groups. Switching threads keeps unsent drafts while the page remains open. Archive hides a conversation in the expandable **Archived** section; unarchive it to continue. While another thread is working, browse saved conversations and use **Jump back** to return to it. Only one thread can run at a time.
+
+Browser refresh restores the selected transcript and results. Threads survive a host restart within the same Revit instance, and existing history migrates into one thread. The tab can be closed while work continues. Reopen it using the ribbon button. Multiple Revit processes get independent hosts/tabs and histories in this prototype; a new Revit instance does not import an earlier instance's threads. A switched or closed document cannot silently redirect an already-submitted edit. See [thread history](docs/THREADS.md) for storage and retention details.
 
 The blue **r/** ribbon icon matches the browser favicon. Its main click always opens Revcode. Use the small dropdown arrow for **Restart Revcode**, **Stop Revcode**, or **Check status**, including when no document is open. Restart and Stop show a brief Revit dialog; Check status reports Starting, Running, Stopping, Restarting, Stopped, or a failure message for this Revit instance.
 

@@ -14,6 +14,7 @@ export const HISTORY_LIMITS = {
 export const RETENTION_DESCRIPTION =
   "Up to 500 completed run details / 64 MiB text and 128 MiB images (10 MiB each). Older summaries remain; expired evidence is labeled. Active runs and unresolved native receipts are protected.";
 export interface RunSummary {
+  threadId?: string;
   id: string;
   instanceId: string;
   number: number;
@@ -71,6 +72,7 @@ export interface RunDetail {
   missingEvidence?: string[];
 }
 export interface HistoryQuery {
+  threadId?: string;
   search?: string;
   errorsOnly?: boolean;
   tool?: string;

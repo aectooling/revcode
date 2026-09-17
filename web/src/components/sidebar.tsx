@@ -34,6 +34,7 @@ export type SidebarDocument = {
 };
 
 export type SidebarProps = {
+  threads?: ReactNode;
   desktop?: DesktopState;
   vision: boolean;
   hostOnline: boolean;
@@ -245,6 +246,7 @@ export function Sidebar(props: SidebarProps) {
   const { tone, label } = useConnectionSummary(hostOnline, revitConnected);
   const panels: ReactNode = (
     <>
+      {props.threads}
       <DocumentCard document={props.document} />
       <section aria-label="Agent tools" className="min-w-0 overflow-hidden px-2.5 py-2">
         <h2 className="text-[10px] font-medium uppercase tracking-wider text-muted">

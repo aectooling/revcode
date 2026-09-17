@@ -188,6 +188,7 @@ export class RunHistory {
       .filter(
         (r) =>
           r.number < before &&
+          (!query.threadId || (r.threadId ?? "legacy") === query.threadId) &&
           (!query.search ||
             r.promptPreview
               .toLowerCase()
