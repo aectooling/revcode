@@ -812,6 +812,8 @@ function App() {
             }}
           />
           <Conversation
+            api={api}
+            runs={threadReady ? (state?.runs ?? []) : []}
             key={selectedThreadId}
             loadImage={loadHistoryImage}
             messages={[
