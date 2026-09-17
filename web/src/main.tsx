@@ -234,6 +234,7 @@ function App() {
     destinationSkillId?: string;
   }>();
   const [selectedRun, setSelectedRun] = useState("");
+  const [historyRevealRequest, setHistoryRevealRequest] = useState(0);
   const [olderMessages, setOlderMessages] = useState<Message[]>([]);
   const [jumpMessageId, setJumpMessageId] = useState("");
   const [steps, setSteps] = useState([
@@ -851,7 +852,7 @@ function App() {
               ),
               ...(threadReady ? (state?.messages ?? []) : []),
             ]}
-            onViewTools={setSelectedRun}
+            onViewTools={id => { setSelectedRun(id); setHistoryRevealRequest(value => value + 1); }}
             jumpMessageId={jumpMessageId}
             busy={
               busy &&
@@ -947,6 +948,7 @@ function App() {
           online={hostOnline}
           activity={JSON.stringify(state?.runs ?? [])}
           selectedRun={selectedRun}
+          revealRequest={historyRevealRequest}
           onSelectRun={setSelectedRun}
           onJump={jumpToRun}
         />

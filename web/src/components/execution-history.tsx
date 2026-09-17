@@ -57,6 +57,7 @@ export function ExecutionHistory({
   online,
   activity,
   selectedRun,
+  revealRequest = 0,
   onSelectRun,
   onJump,
   loadImage,
@@ -68,6 +69,7 @@ export function ExecutionHistory({
   online: boolean;
   activity: unknown;
   selectedRun: string;
+  revealRequest?: number;
   onSelectRun(id: string): void;
   onJump(detail: RunDetail): void;
   loadImage(id: string): Promise<Blob>;
@@ -105,6 +107,7 @@ export function ExecutionHistory({
   const [loading, setLoading] = useState(false);
   const [retention, setRetention] = useState("");
   const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { if (revealRequest) setCollapsed(false); }, [revealRequest]);
   const [large, setLarge] = useState(false);
   const [viewport, setViewport] = useState(() => ({
     width: window.innerWidth,

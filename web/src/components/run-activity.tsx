@@ -73,7 +73,7 @@ export function RunActivity({ runId, summary, busy, connected, api, onViewTools,
   const [expanded, setExpanded] = useState(false);
   const callsId = useId();
   const run = summary ?? detail?.run;
-  const running = summary?.status === "running" || (!summary && busy);
+  const running = run?.status === "running" || (!run && busy);
   useEffect(() => {
     const observer = new IntersectionObserver(([entry]) => setVisible(!!entry?.isIntersecting), { rootMargin: "200px" });
     if (root.current) observer.observe(root.current);

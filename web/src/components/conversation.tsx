@@ -188,7 +188,8 @@ export function Conversation({
                     {message.text}
                   </p>
                 );
-              const streaming = busy && message === last;
+              const runSummary = runs.find(run => run.id === message.runId);
+              const streaming = busy && (runSummary ? runSummary.status === "running" : message === last);
               const reply = (
                 <>
                   {message.text ? (
@@ -217,7 +218,7 @@ export function Conversation({
               return (
                 <div key={message.id} id={`message-${message.id}`} className="min-w-0 animate-slide-up" aria-label="Revcode's reply">
                   {message.runId ? (
-                    <RunActivity runId={message.runId} summary={runs.find(run => run.id === message.runId)} busy={streaming} connected={connected} api={api} onViewTools={onViewTools}>
+                    <RunActivity runId={message.runId} summary={runSummary} busy={streaming} connected={connected} api={api} onViewTools={onViewTools}>
                       {reply}
                     </RunActivity>
                   ) : reply}

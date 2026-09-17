@@ -137,18 +137,24 @@ export class Installer {
         cpSync(source, temp, { recursive: true, dereference: false });
       }
       const info = verify(temp);
-      let payloadVersion = info.version, target = this.payload(payloadVersion);
+      const hash = digest(readFileSync(join(temp, 'integrity.json')));
+      const localVersion = `${info.version}-local-${hash}`;
+      const localTarget = this.payload(localVersion);
+      const installedLocalSource = resolve(source).toLowerCase() === localTarget.toLowerCase();
+      // Retrying a verified installed/pending build must keep its identity even
+      // after cleanup has removed the original canonical version directory.
+      let payloadVersion = installedLocalSource || (replaceSameVersion && existsSync(localTarget)) ? localVersion : info.version;
+      let target = this.payload(payloadVersion);
       if (existsSync(target)) {
         verify(target);
-        const hash = digest(readFileSync(join(temp, 'integrity.json')));
         if (digest(readFileSync(join(target, 'integrity.json'))) !== hash) {
+          if (payloadVersion === localVersion) throw new Error('Installed local build does not match its content identity.');
           if (!replaceSameVersion) throw new Error(`Version ${info.version} already exists with different contents.`);
           // Activate a separate verified build through the existing manifest transaction.
           // Keep the old payload intact for rollback and other Revit registrations.
-          payloadVersion = `${info.version}-local-${hash}`;
-          target = this.payload(payloadVersion);
-          if (existsSync(target)) verify(target);
-          else renameSync(temp, target);
+          payloadVersion = localVersion;
+          target = localTarget;
+          renameSync(temp, target);
         }
       } else renameSync(temp, target);
       return { ...info, payloadVersion };

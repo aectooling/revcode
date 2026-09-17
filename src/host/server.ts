@@ -592,11 +592,13 @@ export async function createHost(options: HostOptions) {
     if (path === "/api/threads/delete") {
       if (storageError) throw new HttpError(503, storageError);
       if (!Array.isArray(data.threadIds) || !data.threadIds.length || data.threadIds.length > 500 || data.threadIds.some((id: unknown) => typeof id !== "string"))
-        throw new HttpError(400, "Expected 1–500 thread IDs.");
+        throw new HttpError(400, "Expected 1-500 thread IDs.");
       if (data.archivedOnly !== undefined && typeof data.archivedOnly !== "boolean") throw new HttpError(400, "Expected archivedOnly boolean.");
       if (data.before !== undefined && data.before !== null && (typeof data.before !== "number" || !Number.isFinite(data.before))) throw new HttpError(400, "Invalid cutoff.");
       const ids = new Set<string>(data.threadIds);
-      const targets = [...ids].map(findThread);
+      // A response can be lost after deletion commits. Accept a retry of known
+      // tombstones, but continue rejecting IDs that never belonged to this host.
+      const targets = [...ids].filter(id => !state.deletedThreadIds?.includes(id)).map(findThread);
       const targetRuns = [...runs.summaries.values()].filter(run => ids.has(run.threadId ?? "legacy"));
       const runIds = new Set(targetRuns.map(run => run.id));
       if ((activeRun && ids.has(activeRun.run.threadId ?? "legacy")) || targetRuns.some(run => run.status === "running" || runs.protected.has(run.id)) || state.operations.some(operation => operation.runId && runIds.has(operation.runId) && !terminal.has(operation.status)))
