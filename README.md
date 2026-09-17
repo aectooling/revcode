@@ -1,6 +1,6 @@
 # Revcode
 
-[Release notes: 0.1.1](docs/releases/0.1.1.md)
+[Release notes: 0.1.2](docs/releases/0.1.2.md)
 
 A local, Pi-powered coding assistant for Revit. Click **Revcode** in Revit to open a browser workspace, chat about the active model, or run C# directly. The agent uses `revit_execute_csharp` for modeling, `revit_capture_view` for API view images, and `revit_ui_observe` / `revit_ui_action` for experimental desktop interaction.
 
