@@ -24,10 +24,18 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
   function run(...args: string[]) {
-    return spawnSync(process.execPath, [join(root, "scripts", "build-install.mjs"), ...args], {
+    const result = spawnSync(process.execPath, [join(root, "scripts", "build-install.mjs"), ...args], {
       encoding: "utf8",
-      timeout: 15_000,
+      // Cold PowerShell startup can be slow on shared Windows CI runners.
+      timeout: 60_000,
     });
+    const diagnostics = [
+      `Error: ${result.error?.stack ?? "none"}`,
+      `Signal: ${result.signal ?? "none"}`,
+      `stdout: ${result.stdout}`,
+      `stderr: ${result.stderr}`,
+    ].join("\n");
+    return { ...result, diagnostics };
   }
 
   it.each([
@@ -36,11 +44,11 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     [["--revit-years", "2025,2026,2025"], ["2025", "2026"]],
   ])("passes years through both script boundaries: %j", (args, years) => {
     const result = run("build-only", ...args);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.diagnostics).toBe(0);
     const [stage] = readdirSync(join(root, "artifacts"));
     const info = JSON.parse(readFileSync(join(root, "artifacts", stage, "package-info.json"), "utf8"));
     expect(info.revitYears).toEqual(years);
-  });
+  }, 65_000);
 
   it.each([
     ["build-only", "revit-years"],
@@ -48,13 +56,14 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     ["build-only", "revit-years", ",,"],
     ["build-only", "open-revit"],
   ])("rejects invalid options: %j", (...args) => {
-    expect(run(...args).status).toBe(1);
-  });
+    const result = run(...args);
+    expect(result.status, result.diagnostics).toBe(1);
+  }, 65_000);
 
   it("propagates packaging failures", () => {
     writeFileSync(join(root, "scripts", "package.ps1"), "throw 'Packaging test failure'");
     const result = run("build-only");
-    expect(result.status).toBe(1);
+    expect(result.status, result.diagnostics).toBe(1);
     expect(result.stderr).toContain("Packaging test failure");
-  });
+  }, 65_000);
 });
