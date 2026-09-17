@@ -225,7 +225,7 @@ describe("authenticated Revit host", () => {
     expect(host.snapshot().operations).toEqual(legacy.operations);
     expect(host.snapshot().runs).toEqual([]);
     const saved = JSON.parse(await readFile(join(dir, "journal.json"), "utf8"));
-    expect(saved.version).toBe(2);
+    expect(saved.version).toBe(3);
     expect(saved.messages).toEqual([]);
     expect(saved.operations).toEqual([]);
     expect(saved.requests).toEqual(legacy.requests);

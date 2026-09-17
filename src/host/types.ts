@@ -13,7 +13,15 @@ export type Operation = Omit<ExecuteInput, 'documentToken'> & {
   result?: unknown; logs?: string[]; diagnostics?: unknown[]; error?: string; transactionStatus?: string; elapsedMs?: number;
 };
 export interface Settings { provider: string; model: string; configured: boolean }
-export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string; runId?: string; images?: import('./images.js').StoredImage[] }
+export interface Message { id: string; role: 'user' | 'assistant' | 'system'; text: string; runId?: string; threadId?: string; images?: import('./images.js').StoredImage[] }
+export interface ThreadSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  documentLabel?: string;
+  archivedAt?: string;
+}
 export interface ProviderSummary { id: string; name?: string; models: { id: string; name: string; supportsImages?: boolean }[]; authenticated?: boolean; authMethods?: { type: 'api_key' | 'oauth'; label: string }[]; credentialSource?: string; credentialLabel?: string; canLogout?: boolean }
 export interface AuthState { provider?: string; busy: boolean; notice?: string; url?: string; userCode?: string; error?: string; completedCount: number; request?: { requestId: string; prompt: string; placeholder?: string; password?: boolean; type: 'text' | 'secret' | 'manual_code' | 'select'; options?: readonly { id: string; label: string; description?: string }[] } }
 export interface CustomProvider { id: string; name?: string; baseUrl: string; apiKey?: string; models: { id: string; name?: string; supportsImages?: boolean }[] }

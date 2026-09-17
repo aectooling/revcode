@@ -15,6 +15,8 @@ const dir = await mkdtemp(join(tmpdir(), 'revcode-images-'));
 let finish;
 let receivedImages;
 let capturedPng = png;
+let releaseCapture;
+let delayCapture = false;
 const host = await createHost({ instanceId: 'images', nativeToken: 'fixture', dataDir: dir, webDir: join(payload, 'dist/web'), agent: {
   providers: [{ id: 'anthropic', models: [{ id: 'vision', name: 'Vision', supportsImages: true }] }],
   configured: () => true, setKey: async () => {}, abort: async () => finish?.(),
@@ -35,6 +37,7 @@ const nativeLoop = (async () => {
     const { command } = JSON.parse(frame.toString());
     if (command?.kind !== 'execute') continue;
     const path = command.code.match(/FilePath = @"([^"]+)"/)[1];
+    if (delayCapture) await new Promise(resolve => { releaseCapture = resolve; });
     await writeFile(path + '.png', Buffer.from(capturedPng, 'base64'));
     await send('operation', { operationId: command.operationId, status: 'succeeded', result: { viewName: '3D' } });
   } } catch { /* teardown */ }
@@ -79,6 +82,15 @@ try {
   await page.getByRole('button', { name: 'Annotate Drawing.png' }).click();
   await expect(page.getByRole('heading', { name: 'Edit drawing' })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // Image drafts and editable scenes belong to the selected thread.
+  const nav = page.getByRole('navigation', { name: 'Thread history' });
+  await nav.getByRole('button', { name: 'New thread', exact: true }).click();
+  await expect(page.getByLabel('Image attachments')).toHaveCount(0);
+  await nav.getByRole('button', { name: /Inactive New thread/ }).and(page.locator(':not([aria-current])')).click();
+  await expect(page.getByRole('button', { name: 'Annotate Drawing.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Annotate reference.png' }).click();
+  await expect(page.getByRole('slider', { name: 'Image opacity' })).toHaveValue('45');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   // An ordinary 1536px native export can exceed the 5 MiB attachment limit.
   capturedPng = await page.evaluate(() => {
     const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1536;
@@ -93,7 +105,17 @@ try {
     return canvas.toDataURL('image/png').split(',')[1];
   });
   expect(Buffer.byteLength(capturedPng, 'base64')).toBeGreaterThan(5 * 1024 * 1024);
+  delayCapture = true;
   await page.getByRole('button', { name: 'Capture active view', exact: true }).click();
+  await expect.poll(() => !!releaseCapture).toBe(true);
+  await nav.getByRole('button', { name: /Inactive New thread/ }).and(page.locator(':not([aria-current])')).click();
+  await expect(page.getByLabel('Image attachments')).toHaveCount(0);
+  const captureResponse = page.waitForResponse(response => response.url().endsWith('/api/capture-view'));
+  releaseCapture();
+  await captureResponse;
+  await expect.poll(() => host.snapshot().busy).toBe(false);
+  await expect(page.getByLabel('Image attachments')).toHaveCount(0);
+  await nav.getByRole('button', { name: /Inactive New thread/ }).and(page.locator(':not([aria-current])')).click();
   await expect(page.getByRole('button', { name: 'Annotate Active Revit view.png' })).toBeVisible();
   await page.getByRole('button', { name: 'Annotate Active Revit view.png' }).click();
   await expect(page.getByRole('button', { name: 'Save annotations', exact: true })).toBeEnabled();
@@ -111,10 +133,15 @@ try {
   await expect.poll(() => host.snapshot().busy).toBe(false);
   await page.reload();
   await expect(page.getByAltText('Attached image 3', { exact: true })).toBeVisible();
+  await nav.getByRole('button', { name: /Inactive New thread/ }).and(page.locator(':not([aria-current])')).click();
+  await expect(page.getByAltText('Attached image 3', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Image attachments')).toHaveCount(0);
+  await nav.getByRole('button', { name: /Inactive/ }).and(page.locator(':not([aria-current])')).click();
+  await expect(page.getByAltText('Attached image 3', { exact: true })).toBeVisible();
   expect(errors).toEqual([]); expect(fontFailures).toEqual([]); expect(external).toEqual([]);
-  console.log('PASS image smoke: upload, annotate, draw, reopen, active-view capture, image-only send, provider payload, cancellation, reload, local fonts.');
+  console.log('PASS image smoke: upload, annotate, draw, reopen, active-view capture, image-only send, provider payload, cancellation, reload, local fonts, thread draft/scene isolation, capture across thread switches, sent-image isolation.');
 } finally {
-  finish?.(); clearInterval(heartbeat); await browser.close(); native.close(); await nativeLoop; await host.close();
+  releaseCapture?.(); finish?.(); clearInterval(heartbeat); await browser.close(); native.close(); await nativeLoop; await host.close();
   if (dirname(resolve(dir)) !== resolve(tmpdir()) || !basename(dir).startsWith('revcode-images-')) throw new Error('Unexpected temporary directory');
   await rm(dir, { recursive: true, force: true });
 }

@@ -18,6 +18,7 @@
     "test:native": "dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release",
     "test:transport": "dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=8 -p:RestoreLockedMode=true && dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=10 -p:RestoreLockedMode=true",
     "test:browser": "node web/tests/browser-smoke.mjs",
+    "test:threads": "node web/tests/threads-smoke.mjs",
     "test:highlighting": "node web/tests/highlighting-smoke.mjs",
     "test:skills-runs": "node web/tests/skills-runs-smoke.mjs",
     "test:provider-ui": "node web/tests/provider-sdk-smoke.mjs",

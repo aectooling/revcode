@@ -10,6 +10,7 @@ import {
   type Mode,
 } from "./components/console-panel";
 import { Conversation } from "./components/conversation";
+import { ThreadList } from "./components/thread-list";
 import {
   ExecutionHistory,
   type Operation,
@@ -24,6 +25,7 @@ import type {
   Message,
   ProviderSummary,
   Settings,
+  ThreadSummary,
 } from "../../src/host/types";
 import { SkillsDialog } from "./components/skills-dialog";
 import type { SkillSummary } from "../../src/host/skills";
@@ -51,6 +53,10 @@ import { Loader2, TriangleAlert } from "lucide-react";
 import { DesktopPanel } from "./components/desktop-panel";
 import type { DesktopState } from "../../src/host/desktop-types";
 type HostState = {
+  threads?: ThreadSummary[];
+  selectedThreadId?: string;
+  activeThreadId?: string;
+  hasOlderMessages?: boolean;
   instanceId: string;
   connected: boolean;
   busy: boolean;
@@ -191,6 +197,26 @@ function StatusPill({
 }
 
 function App() {
+  const [selectedThreadId, setSelectedThreadId] = useState(() => {
+    try {
+      return sessionStorage.getItem("revcode.thread") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const selectedThreadRef = useRef(selectedThreadId);
+  const threadDrafts = useRef(
+    new Map<
+      string,
+      {
+        prompt: string;
+        images: DraftImage[];
+        skills: SkillSummary[];
+        authoring?: { sourceRunId?: string; destinationSkillId?: string };
+      }
+    >(),
+  );
+  const [olderAvailable, setOlderAvailable] = useState<boolean>();
   const [activeToken, setActiveToken] = useState(token);
   const [state, setState] = useState<HostState | null>(null);
   const [hostOnline, setHostOnline] = useState(false);
@@ -260,12 +286,19 @@ function App() {
     const poll = async () => {
       try {
         const next = await api<HostState>(
-          "/api/state",
+          `/api/state?threadId=${encodeURIComponent(selectedThreadId)}`,
           undefined,
           controller.signal,
         );
-        if (!disposed) {
+        if (!disposed && selectedThreadRef.current === selectedThreadId) {
           setState(next);
+          if (
+            next.selectedThreadId &&
+            next.selectedThreadId !== selectedThreadId
+          ) {
+            selectedThreadRef.current = next.selectedThreadId;
+            setSelectedThreadId(next.selectedThreadId);
+          }
           setHostOnline(true);
           setConnectionError("");
         }
@@ -288,7 +321,14 @@ function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [activeToken]);
+  }, [activeToken, selectedThreadId]);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("revcode.thread", selectedThreadId);
+    } catch {
+      /* Selection works without storage. */
+    }
+  }, [selectedThreadId]);
   const draftStorage = useConsoleDraft({
     api,
     instanceId: state?.instanceId,
@@ -331,11 +371,35 @@ function App() {
     (operation) => operation.status === "unknown",
   );
   const canExecute = ready && !busy && !unknown;
-  const authoringRequest = !!authoringDraft || /\b(?:create|make|update|revise|edit)\s+(?:(?:a|an|the|this|that|existing|reusable)\s+){0,3}skill\b/i.test(prompt);
+  const authoringRequest =
+    !!authoringDraft ||
+    /\b(?:create|make|update|revise|edit)\s+(?:(?:a|an|the|this|that|existing|reusable)\s+){0,3}skill\b/i.test(
+      prompt,
+    );
+  const selectedThread = state?.threads?.find(
+    (thread) => thread.id === selectedThreadId,
+  );
+  const threadReady =
+    !state?.selectedThreadId || state.selectedThreadId === selectedThreadId;
+  // Keep a contiguous window once paging begins, including messages that roll
+  // out of the host's latest-200 snapshot during a new turn.
+  useEffect(() => {
+    if (olderAvailable === undefined || !threadReady) return;
+    setOlderMessages((current) => [
+      ...new Map(
+        [...current, ...(state?.messages ?? [])].map((message) => [
+          message.id,
+          message,
+        ]),
+      ).values(),
+    ]);
+  }, [state?.messages, olderAvailable, threadReady]);
   const canChat =
-    authoringRequest
+    threadReady &&
+    !selectedThread?.archivedAt &&
+    (authoringRequest
       ? hostOnline && !pending && !(state?.chatBusy ?? state?.busy)
-      : canExecute;
+      : canExecute);
   const canRunSnippet =
     canExecute &&
     (!documentToken || !!targetDocument) &&
@@ -353,7 +417,88 @@ function App() {
     setSettingsOpen(true);
   }
   async function refreshState() {
-    setState(await api<HostState>("/api/state"));
+    const id = selectedThreadRef.current;
+    const next = await api<HostState>(
+      `/api/state?threadId=${encodeURIComponent(id)}`,
+    );
+    if (selectedThreadRef.current === id) setState(next);
+  }
+  function selectThread(id: string) {
+    if (pending || id === selectedThreadId) return;
+    threadDrafts.current.set(selectedThreadId, {
+      prompt,
+      images,
+      skills: selectedSkills,
+      authoring: authoringDraft,
+    });
+    const draft = threadDrafts.current.get(id);
+    setPrompt(draft?.prompt ?? "");
+    setImages(draft?.images ?? []);
+    setSelectedSkills(draft?.skills ?? []);
+    setAuthoringDraft(draft?.authoring);
+    selectedThreadRef.current = id;
+    setSelectedThreadId(id);
+    setOlderMessages([]);
+    setOlderAvailable(undefined);
+    setSelectedRun("");
+    setJumpMessageId("");
+    setMobileOpen(false);
+  }
+  async function createThread() {
+    if (pending) return;
+    setPending(true);
+    try {
+      const thread = await api<ThreadSummary>("/api/threads", {
+        requestId: crypto.randomUUID(),
+      });
+      selectThread(thread.id);
+    } catch (reason) {
+      toast(String(reason));
+    } finally {
+      setPending(false);
+    }
+  }
+  async function archiveThread(thread: ThreadSummary) {
+    try {
+      await api("/api/threads/archive", {
+        threadId: thread.id,
+        archived: !thread.archivedAt,
+      });
+      await refreshState();
+      toast(
+        thread.archivedAt
+          ? "Thread restored."
+          : "Thread archived. Restore it from Archived to continue.",
+        "info",
+      );
+    } catch (reason) {
+      toast(String(reason));
+    }
+  }
+  async function loadOlderMessages() {
+    const id = selectedThreadId;
+    const before = olderMessages[0]?.id ?? state?.messages[0]?.id;
+    try {
+      const page = await api<{
+        messages: Message[];
+        hasOlderMessages: boolean;
+      }>(
+        `/api/threads/messages?threadId=${encodeURIComponent(id)}${before ? `&before=${encodeURIComponent(before)}` : ""}`,
+      );
+      if (selectedThreadRef.current !== id) return;
+      setOlderMessages((current) => [
+        ...page.messages.filter(
+          (m) => !current.some((existing) => existing.id === m.id),
+        ),
+        ...current,
+        ...(state?.messages ?? []).filter(
+          (m) => !current.some((existing) => existing.id === m.id),
+        ),
+      ]);
+      setOlderAvailable(page.hasOlderMessages);
+    } catch (reason) {
+      toast(String(reason));
+    }
   }
   async function submitChat() {
     if (submitting.current || !canChat || !state?.settings.configured || (images.length > 0 && !supportsImages)) return;
@@ -363,11 +508,14 @@ function App() {
     setPending(true);
     try {
       const payload = {
+        threadId: selectedThreadId || undefined,
         text: prompt.trim(),
         images: images.map(item => item.image),
         mode: authoringDraft ? "authoring" : "execution",
         selectedSkillIds: selectedSkills.map((skill) => skill.id),
-        sourceRunIds: authoringDraft?.sourceRunId ? [authoringDraft.sourceRunId] : [],
+        sourceRunIds: authoringDraft?.sourceRunId
+          ? [authoringDraft.sourceRunId]
+          : [],
         ...(authoringDraft?.destinationSkillId
           ? { destinationSkillId: authoringDraft.destinationSkillId }
           : {}),
@@ -446,11 +594,12 @@ function App() {
       let cursor: string | undefined;
       do {
         const page = await api<{ runs: RunSummary[]; nextCursor?: string }>(
-          `/api/runs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+          `/api/runs?threadId=${encodeURIComponent(selectedThreadId)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
         );
         recent = page.runs.find((run) => run.intent !== "authoring");
         cursor = page.nextCursor;
       } while (!recent && cursor);
+      if (selectedThreadRef.current !== selectedThreadId) return;
       if (!recent && !skill) {
         toast(
           "No usable recorded work yet. Describe the workflow you want to capture.",
@@ -465,7 +614,12 @@ function App() {
       toast(String(reason));
     }
   }
-  function jumpToRun(detail: RunDetail) {
+  async function jumpToRun(detail: RunDetail) {
+    if (
+      (detail.run.threadId ?? "legacy") !== selectedThreadRef.current &&
+      selectedThreadRef.current
+    )
+      return;
     const message = detail.messages.find(
       (item) => item.id === detail.run.userMessageId,
     );
@@ -473,13 +627,35 @@ function App() {
       toast("The associated message is unavailable or expired.", "info");
       return;
     }
-    setOlderMessages((current) => [
-      ...current.filter(
-        (item) => !detail.messages.some((next) => next.id === item.id),
-      ),
-      ...detail.messages,
-    ]);
-    setJumpMessageId(message.id);
+    const id = selectedThreadId;
+    let window = [
+      ...new Map(
+        [...olderMessages, ...(state?.messages ?? [])].map((m) => [m.id, m]),
+      ).values(),
+    ];
+    let hasOlder = olderAvailable ?? state?.hasOlderMessages;
+    try {
+      while (!window.some((m) => m.id === message.id) && hasOlder) {
+        const page = await api<{
+          messages: Message[];
+          hasOlderMessages: boolean;
+        }>(
+          `/api/threads/messages?threadId=${encodeURIComponent(id)}&before=${encodeURIComponent(window[0]!.id)}`,
+        );
+        if (selectedThreadRef.current !== id) return;
+        window = [...page.messages, ...window];
+        hasOlder = page.hasOlderMessages;
+      }
+      if (!window.some((m) => m.id === message.id)) {
+        toast("The associated message is unavailable or expired.", "info");
+        return;
+      }
+      setOlderMessages(window);
+      setOlderAvailable(!!hasOlder);
+      setJumpMessageId(message.id);
+    } catch (reason) {
+      toast(String(reason));
+    }
   }
   async function cancel() {
     try {
@@ -532,6 +708,17 @@ function App() {
           Skip to message
         </a>
         <Sidebar
+          threads={
+            <ThreadList
+              threads={state?.threads ?? []}
+              selectedId={selectedThreadId}
+              activeId={state?.activeThreadId}
+              online={hostOnline && !pending}
+              onSelect={selectThread}
+              onCreate={() => void createThread()}
+              onArchive={(thread) => void archiveThread(thread)}
+            />
+          }
           desktop={state?.desktop}
           vision={
             !!state?.providers
@@ -564,7 +751,7 @@ function App() {
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
             <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-tight text-ink-soft">
-              Build with your model.
+              {selectedThread?.title ?? "Build with your model."}
             </h1>
             <StatusPill
               hostOnline={hostOnline}
@@ -577,6 +764,32 @@ function App() {
             revitConnected={!!state?.connected}
             detail={connectionDetail}
           />
+          {state?.activeThreadId &&
+            state.activeThreadId !== selectedThreadId && (
+              <div className="flex items-center justify-between border-b border-line bg-surface px-4 py-2 text-xs text-ink-soft">
+                <span>
+                  Another thread is working. You can browse history while it
+                  finishes.
+                </span>
+                <button
+                  className="text-accent"
+                  onClick={() => selectThread(state.activeThreadId!)}
+                >
+                  Jump back
+                </button>
+              </div>
+            )}
+          {selectedThread?.archivedAt && (
+            <div className="flex items-center justify-between border-b border-line bg-surface px-4 py-2 text-xs text-ink-soft">
+              <span>This thread is archived.</span>
+              <button
+                className="text-accent"
+                onClick={() => void archiveThread(selectedThread)}
+              >
+                Unarchive to continue
+              </button>
+            </div>
+          )}
           {unknown && (
             <div
               role="alert"
@@ -599,17 +812,22 @@ function App() {
             }}
           />
           <Conversation
+            key={selectedThreadId}
             loadImage={loadHistoryImage}
             messages={[
               ...olderMessages.filter(
                 (message) =>
                   !state?.messages.some((current) => current.id === message.id),
               ),
-              ...(state?.messages ?? []),
+              ...(threadReady ? (state?.messages ?? []) : []),
             ]}
             onViewTools={setSelectedRun}
             jumpMessageId={jumpMessageId}
-            busy={busy}
+            busy={
+              busy &&
+              (!state?.activeThreadId ||
+                state.activeThreadId === selectedThreadId)
+            }
             connected={hostOnline}
             configured={!!state?.settings.configured}
             onSuggestion={(text) => {
@@ -617,14 +835,32 @@ function App() {
               composer.current?.focus();
             }}
           />
+          {threadReady && (olderAvailable ?? state?.hasOlderMessages) && (
+            <button
+              className="shrink-0 py-2 text-xs text-accent"
+              onClick={() => void loadOlderMessages()}
+            >
+              Load earlier messages
+            </button>
+          )}
           <Composer
+            key={`composer-${selectedThreadId}`}
             ref={composer}
             draft={prompt}
             onDraftChange={setPrompt}
             onSubmit={() => void submitChat()}
-            disabled={!hostOnline || pending}
+            disabled={
+              !hostOnline || pending || !!selectedThread?.archivedAt || !threadReady
+            }
             images={images}
-            onImagesChange={setImages}
+            onImagesChange={(next) => {
+              if (selectedThreadRef.current === selectedThreadId) {
+                setImages(next);
+              } else {
+                const draft = threadDrafts.current.get(selectedThreadId);
+                if (draft) threadDrafts.current.set(selectedThreadId, { ...draft, images: next });
+              }
+            }}
             captureDisabled={!canExecute || !doc || authoringRequest}
             onCapture={async () => {
               const result = await api<{ image: ImageAttachment }>("/api/capture-view", {});
@@ -645,7 +881,11 @@ function App() {
                 </>
               ) : images.length > 0 && !supportsImages ? "Select an image-capable model to send these images." : undefined
             }
-            canAbort={busy}
+            canAbort={
+              busy &&
+              (!state?.activeThreadId ||
+                state.activeThreadId === selectedThreadId)
+            }
             abortDisabled={pending || !hostOnline}
             onAbort={() => void cancel()}
             controls={
@@ -665,6 +905,8 @@ function App() {
           />
         </main>
         <ExecutionHistory
+          key={selectedThreadId}
+          threadId={selectedThreadId || undefined}
           loadImage={loadHistoryImage}
           onOpenSkill={(id) => {
             setPreviewSkillId(id);
