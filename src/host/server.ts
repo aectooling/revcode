@@ -296,6 +296,20 @@ export async function createHost(options: HostOptions) {
     desktop.inFlight ||
     desktop.fenced ||
     state.operations.some((o) => !terminal.has(o.status));
+  // Use the same recovery policy for the UI and the destructive endpoint.
+  function protectedThreadIds() {
+    const protectedIds = new Set<string>();
+    const unresolvedRuns = new Set(
+      state.operations.filter(operation => !terminal.has(operation.status)).map(operation => operation.runId),
+    );
+    for (const run of runs.summaries.values()) {
+      if (run.status === "running" || runs.protected.has(run.id) || unresolvedRuns.has(run.id)) {
+        protectedIds.add(run.threadId ?? "legacy");
+      }
+    }
+    if (activeRun) protectedIds.add(activeRun.run.threadId ?? "legacy");
+    return protectedIds;
+  }
   const snapshot = (threadId = "legacy") => ({
     instanceId: options.instanceId,
     context,
@@ -308,7 +322,7 @@ export async function createHost(options: HostOptions) {
     requests: undefined,
     deletedThreadIds: undefined,
     historyStorage: { journalPath: journal, runsPath: resolve(options.dataDir, "runs") },
-    protectedThreadIds: [...new Set([...runs.summaries.values()].filter(run => run.status === "running" || runs.protected.has(run.id) || state.operations.some(operation => operation.runId === run.id && !terminal.has(operation.status))).map(run => run.threadId ?? "legacy"))],
+    protectedThreadIds: [...protectedThreadIds()],
     selectedThreadId: threadId,
     activeThreadId: activeRun?.run.threadId,
     runs: runs.list({ limit: 50, threadId }).runs,
@@ -601,7 +615,8 @@ export async function createHost(options: HostOptions) {
       const targets = [...ids].filter(id => !state.deletedThreadIds?.includes(id)).map(findThread);
       const targetRuns = [...runs.summaries.values()].filter(run => ids.has(run.threadId ?? "legacy"));
       const runIds = new Set(targetRuns.map(run => run.id));
-      if ((activeRun && ids.has(activeRun.run.threadId ?? "legacy")) || targetRuns.some(run => run.status === "running" || runs.protected.has(run.id)) || state.operations.some(operation => operation.runId && runIds.has(operation.runId) && !terminal.has(operation.status)))
+      const protectedIds = protectedThreadIds();
+      if ([...ids].some(id => protectedIds.has(id)))
         throw new HttpError(409, "Stop the thread and resolve pending outcomes before deleting it.");
       if (data.archivedOnly && targets.some(thread => !thread.archivedAt || (data.before != null && Date.parse(thread.updatedAt) >= data.before)))
         throw new HttpError(409, "Archived threads changed. Review the selection again.");

@@ -69,7 +69,7 @@ Existing Pi sign-ins are reused. Credentials are managed by Pi's own storage and
 
 Custom OpenAI-compatible endpoints can be added with a provider ID, API base URL, model ID(s), and optional API key. A blank key supports local endpoints that do not require authentication. Custom model definitions live in `%LOCALAPPDATA%\Revcode\user\models.json`; actual keys stay in Pi credential storage. The selected model persists across Revit launches.
 
-Use **New thread** in the sidebar to start a separate conversation. Threads have their own agent context and run history, with automatic titles and date groups. Switching threads keeps unsent drafts while the page remains open. Archive hides a conversation in the expandable **Archived** section; unarchive it to continue. While another thread is working, browse saved conversations and use **Jump back** to return to it. Only one thread can run at a time.
+Use **New thread** in the sidebar, collapsed desktop rail, or mobile top bar to start a separate conversation. Threads have their own agent context and run history, with automatic titles and date groups. Switching threads keeps unsent drafts while the page remains open. Archive hides a conversation in the expandable **Archived** section; unarchive it to continue. While another thread is working, browse saved conversations and use **Jump back** to return to it. Only one thread can run at a time.
 
 Browser refresh restores the selected transcript and results. Threads survive a host restart within the same Revit instance, and existing history migrates into one thread. The tab can be closed while work continues. Reopen it using the ribbon button. Multiple Revit processes get independent hosts/tabs and histories in this prototype; a new Revit instance does not import an earlier instance's threads. A switched or closed document cannot silently redirect an already-submitted edit. See [thread history](docs/THREADS.md) for storage and retention details.
 
@@ -215,6 +215,13 @@ Native add-in changes require closing Revit and reinstalling. C# snippets compil
 
 The prototype has one execution owner per Revit process, one explicit document target per call, and one transaction per modify call. It does not implement a shared multi-process scheduler, multi-agent workflows, NuGet dependencies, atomic multi-document rollback, or an embedded Revit panel. Revit year builds are distinct; compiling them does not establish compatibility with every future update, including the .NET 10 transition within Revit 2026.
 
-To uninstall, close Revit and run `./scripts/uninstall.ps1`. This removes only Revcode's manifests, preserving settings, history, and versioned package files.
+To uninstall, close Revit and run `./scripts/uninstall.ps1`. This unregisters Revcode and removes eligible managed payloads, preserving settings and history. Payloads still referenced by an installation or running their own Node executable are retained; see [deployment and removal](docs/DEPLOYMENT.md).
 
 MIT license. The shipped Pi, ZeroMQ, Roslyn, React, and Node dependencies retain their own licenses.
+
+## Maintainer guides
+
+- [Deployment and releases](docs/DEPLOYMENT.md): compatibility, installation, packaging, signing, and removal.
+- [Thread history and chat](docs/THREADS.md): drafts, archive/deletion, storage, and activity display.
+- [Skills](docs/skills.md) and [host storage contracts](docs/FEATURE-CONTRACTS.md): authoring, retention, and recovery.
+- [C# highlighting and drafts](docs/CSHARP-HIGHLIGHTING.md), [desktop protocol](docs/DESKTOP-PROTOCOL.md), and [package size](docs/PACKAGE-SIZE.md): implementation constraints.
