@@ -1,10 +1,12 @@
+import { createCaptureTool } from "./capture-view.js";
+import { MAX_IMAGE_BASE64, MAX_IMAGES, parseImages } from "./images.js";
 import { validateExecuteInput } from "./execute-input.js";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
 import type {
@@ -456,9 +458,10 @@ export async function createHost(options: HostOptions) {
   const body = async (req: IncomingMessage): Promise<any> => {
     let size = 0;
     const chunks: Buffer[] = [];
+    const limit = req.url === "/api/chat" ? MAX_IMAGES * MAX_IMAGE_BASE64 + 256 * 1024 : 1024 * 1024;
     for await (const chunk of req) {
       size += chunk.length;
-      if (size > 1024 * 1024) throw new HttpError(413, "Request too large.");
+      if (size > limit) throw new HttpError(413, "Request too large.");
       chunks.push(chunk);
     }
     try {
@@ -482,9 +485,10 @@ export async function createHost(options: HostOptions) {
       !/^[a-zA-Z0-9-]{8,80}$/.test(data.requestId)
     )
       throw new HttpError(400, "A stable requestId is required.");
-    const fingerprint = JSON.stringify(data);
+    const serialized = JSON.stringify(data);
+    const fingerprint = createHash("sha256").update(serialized).digest("hex");
     const old = state.requests[data.requestId];
-    if (old && old.fingerprint !== fingerprint)
+    if (old && old.fingerprint !== fingerprint && old.fingerprint !== serialized)
       throw new HttpError(
         409,
         "requestId was already used for different content.",
@@ -500,6 +504,23 @@ export async function createHost(options: HostOptions) {
     submissionEpoch: number,
   ) {
     const data = await body(req);
+    if (path === '/api/capture-view') {
+      if (submissionEpoch !== cancellationEpoch || busy() || auth.busy || storageError) throw new HttpError(409, 'Wait for the current operation before capturing.');
+      const doc = checkDocument();
+      if (!doc) throw new HttpError(409, 'Open a Revit document to capture its active view.');
+      const controller = new AbortController(); turnAbort = controller; chatBusy = true;
+      // Do not hold mutationChain while waiting for native operation events.
+      void createCaptureTool(options.dataDir, execute, true).execute(randomUUID(), { documentToken: doc.token, region: 'visible', pixelSize: 1536 }, controller.signal)
+        .then(result => {
+          const image = result.content.find(item => item.type === 'image');
+          if (!image) throw new Error((result.details?.result as { captureError?: string })?.captureError ?? result.details?.error ?? 'Could not capture the active view.');
+          if (controller.signal.aborted) throw new Error('Capture cancelled.');
+          send(res, 200, { image });
+        }).catch(error => send(res, 409, { error: error.message }))
+        .finally(() => { chatBusy = false; turnAbort = undefined; broadcast(); });
+      broadcast(); return;
+    }
+
     if (path === "/api/console-draft") {
       if (
         data.version !== 1 ||
@@ -845,12 +866,15 @@ export async function createHost(options: HostOptions) {
         broadcast();
         return;
       }
+      let images: ReturnType<typeof parseImages>;
+      try { images = parseImages(data.images); } catch (error) { throw new HttpError(400, (error as Error).message); }
+      if (images?.length && !options.agent.providers.find(p => p.id === state.settings.provider)?.models.find(m => m.id === state.settings.model)?.supportsImages) throw new HttpError(409, "Select an image-capable model to send images.");
       if (
         typeof data.text !== "string" ||
-        !data.text.trim() ||
+        (!data.text.trim() && !images?.length) ||
         data.text.length > 32000
       )
-        throw new HttpError(400, "Message must contain 1–32000 characters.");
+        throw new HttpError(400, "Add a message or image (up to 32000 characters).");
       if (!options.agent.configured(state.settings.provider))
         throw new HttpError(409, "Connect a provider first.");
       if (
@@ -1008,6 +1032,7 @@ export async function createHost(options: HostOptions) {
       turnAbort = controller;
       chatBusy = true;
       try {
+        if (images?.length) userMessage.images = await runs.result(images, run, []) as Message["images"];
         await runs.save(run);
         await persist();
       } catch (error) {
@@ -1223,6 +1248,7 @@ export async function createHost(options: HostOptions) {
               },
             ],
           },
+          images,
         )
         .then(() => {
           controller.signal.throwIfAborted();
@@ -1456,6 +1482,7 @@ export async function createHost(options: HostOptions) {
         ".css": "text/css",
         ".svg": "image/svg+xml",
         ".png": "image/png",
+        ".woff2": "font/woff2",
       };
       res.writeHead(200, {
         "Content-Type": types[extname(file)] ?? "application/octet-stream",

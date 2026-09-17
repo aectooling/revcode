@@ -36,7 +36,8 @@
     "release:build": "node scripts/release.mjs build",
     "release:publish": "node scripts/release.mjs publish",
     "release:resume": "node scripts/release.mjs resume",
-    "test:deployment": "node --test scripts/deployment/*.test.mjs"
+    "test:deployment": "node --test scripts/deployment/*.test.mjs",
+    "test:images": "node web/tests/images-smoke.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
@@ -46,6 +47,7 @@
     "zeromq": "6.5.0"
   },
   "devDependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
     "@playwright/test": "1.58.2",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-select": "^2.3.7",

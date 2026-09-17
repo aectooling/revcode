@@ -23,6 +23,7 @@ jobs:
             10.0.301
       - run: npm ci
       - run: npm run check
+      - run: npm run test:images
       - run: npm run test:deployment
       - run: node scripts/smoke-host-lifecycle.mjs
       - run: dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release

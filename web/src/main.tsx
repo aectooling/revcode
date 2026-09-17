@@ -44,6 +44,8 @@ import {
 } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
+import { readImage, type DraftImage } from "./lib/image-attachments";
+import type { ImageAttachment } from "../../src/host/images";
 import mark from "./assets/revcode-mark.svg";
 import { Loader2, TriangleAlert } from "lucide-react";
 import { DesktopPanel } from "./components/desktop-panel";
@@ -194,6 +196,7 @@ function App() {
   const [hostOnline, setHostOnline] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [images, setImages] = useState<DraftImage[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [previewSkillId, setPreviewSkillId] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<SkillSummary[]>([]);
@@ -343,6 +346,7 @@ function App() {
     state?.settings.provider,
     state?.providers ?? [],
   );
+  const supportsImages = !!state?.providers.find(p => p.id === state.settings.provider)?.models.find(m => m.id === state.settings.model)?.supportsImages;
   const connectionDetail = !hostOnline ? connectionError : "";
   function openSettings() {
     setMobileOpen(false);
@@ -352,12 +356,15 @@ function App() {
     setState(await api<HostState>("/api/state"));
   }
   async function submitChat() {
-    if (submitting.current || !canChat || !state?.settings.configured) return;
+    if (submitting.current || !canChat || !state?.settings.configured || (images.length > 0 && !supportsImages)) return;
+    const submittedPrompt = prompt;
+    const submittedImages = images;
     submitting.current = true;
     setPending(true);
     try {
       const payload = {
         text: prompt.trim(),
+        images: images.map(item => item.image),
         mode: authoringDraft ? "authoring" : "execution",
         selectedSkillIds: selectedSkills.map((skill) => skill.id),
         sourceRunIds: authoringDraft?.sourceRunId ? [authoringDraft.sourceRunId] : [],
@@ -370,7 +377,8 @@ function App() {
         chatRequest.current = { key, id: crypto.randomUUID() };
       await api("/api/chat", { requestId: chatRequest.current.id, ...payload });
       chatRequest.current = undefined;
-      setPrompt("");
+      setPrompt(current => current === submittedPrompt ? "" : current);
+      setImages(current => current.filter(item => !submittedImages.some(sent => sent.id === item.id)));
       setAuthoringDraft(undefined);
       setSelectedSkills([]);
       composer.current?.focus();
@@ -591,6 +599,7 @@ function App() {
             }}
           />
           <Conversation
+            loadImage={loadHistoryImage}
             messages={[
               ...olderMessages.filter(
                 (message) =>
@@ -613,8 +622,16 @@ function App() {
             draft={prompt}
             onDraftChange={setPrompt}
             onSubmit={() => void submitChat()}
-            disabled={!hostOnline}
-            submitDisabled={!canChat || !state?.settings.configured}
+            disabled={!hostOnline || pending}
+            images={images}
+            onImagesChange={setImages}
+            captureDisabled={!canExecute || !doc || authoringRequest}
+            onCapture={async () => {
+              const result = await api<{ image: ImageAttachment }>("/api/capture-view", {});
+              const bytes = Uint8Array.from(atob(result.image.data), character => character.charCodeAt(0));
+              return readImage(new File([bytes], "Active Revit view.png", { type: result.image.mimeType }));
+            }}
+            submitDisabled={!canChat || !state?.settings.configured || (images.length > 0 && !supportsImages)}
             alert={
               hostOnline && state && !state.settings.configured ? (
                 <>
@@ -627,7 +644,7 @@ function App() {
                   </button>{" "}
                   without credentials.
                 </>
-              ) : undefined
+              ) : images.length > 0 && !supportsImages ? "Select an image-capable model to send these images." : undefined
             }
             canAbort={busy}
             abortDisabled={pending || !hostOnline}
