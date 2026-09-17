@@ -286,7 +286,7 @@ function App() {
           undefined,
           controller.signal,
         );
-        if (!disposed) {
+        if (!disposed && selectedThreadRef.current === selectedThreadId) {
           setState(next);
           if (
             next.selectedThreadId &&
@@ -377,6 +377,19 @@ function App() {
   );
   const threadReady =
     !state?.selectedThreadId || state.selectedThreadId === selectedThreadId;
+  // Keep a contiguous window once paging begins, including messages that roll
+  // out of the host's latest-200 snapshot during a new turn.
+  useEffect(() => {
+    if (olderAvailable === undefined || !threadReady) return;
+    setOlderMessages((current) => [
+      ...new Map(
+        [...current, ...(state?.messages ?? [])].map((message) => [
+          message.id,
+          message,
+        ]),
+      ).values(),
+    ]);
+  }, [state?.messages, olderAvailable, threadReady]);
   const canChat =
     threadReady &&
     !selectedThread?.archivedAt &&
@@ -471,6 +484,9 @@ function App() {
           (m) => !current.some((existing) => existing.id === m.id),
         ),
         ...current,
+        ...(state?.messages ?? []).filter(
+          (m) => !current.some((existing) => existing.id === m.id),
+        ),
       ]);
       setOlderAvailable(page.hasOlderMessages);
     } catch (reason) {
@@ -587,8 +603,12 @@ function App() {
       toast(String(reason));
     }
   }
-  function jumpToRun(detail: RunDetail) {
-    if ((detail.run.threadId ?? "legacy") !== selectedThreadRef.current && selectedThreadRef.current) return;
+  async function jumpToRun(detail: RunDetail) {
+    if (
+      (detail.run.threadId ?? "legacy") !== selectedThreadRef.current &&
+      selectedThreadRef.current
+    )
+      return;
     const message = detail.messages.find(
       (item) => item.id === detail.run.userMessageId,
     );
@@ -596,13 +616,35 @@ function App() {
       toast("The associated message is unavailable or expired.", "info");
       return;
     }
-    setOlderMessages((current) => [
-      ...current.filter(
-        (item) => !detail.messages.some((next) => next.id === item.id),
-      ),
-      ...detail.messages,
-    ]);
-    setJumpMessageId(message.id);
+    const id = selectedThreadId;
+    let window = [
+      ...new Map(
+        [...olderMessages, ...(state?.messages ?? [])].map((m) => [m.id, m]),
+      ).values(),
+    ];
+    let hasOlder = olderAvailable ?? state?.hasOlderMessages;
+    try {
+      while (!window.some((m) => m.id === message.id) && hasOlder) {
+        const page = await api<{
+          messages: Message[];
+          hasOlderMessages: boolean;
+        }>(
+          `/api/threads/messages?threadId=${encodeURIComponent(id)}&before=${encodeURIComponent(window[0]!.id)}`,
+        );
+        if (selectedThreadRef.current !== id) return;
+        window = [...page.messages, ...window];
+        hasOlder = page.hasOlderMessages;
+      }
+      if (!window.some((m) => m.id === message.id)) {
+        toast("The associated message is unavailable or expired.", "info");
+        return;
+      }
+      setOlderMessages(window);
+      setOlderAvailable(!!hasOlder);
+      setJumpMessageId(message.id);
+    } catch (reason) {
+      toast(String(reason));
+    }
   }
   async function cancel() {
     try {
