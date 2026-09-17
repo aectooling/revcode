@@ -57,7 +57,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $packageRoot 'scripts') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $packageRoot 'scripts/deployment') | Out-Null
     foreach ($file in @('cli.mjs', 'installer.mjs', 'files.mjs', 'windows.mjs', 'guard.ps1', 'uninstall.ps1', 'revcode.cjs')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot "deployment/$file") -Destination (Join-Path $packageRoot 'scripts/deployment') }
-    Invoke-Checked 'npm.cmd' @('ci', '--omit=dev', '--ignore-scripts', '--prefix', $packageRoot)
+    & (Join-Path $PSScriptRoot 'install-payload-dependencies.ps1') -PackagePath $packageRoot
     $nodePath = (& node -p 'process.execPath').Trim()
     $runtimeOutput = Join-Path $packageRoot 'runtime'
     New-Item -ItemType Directory -Path $runtimeOutput | Out-Null
