@@ -708,6 +708,8 @@ function App() {
           Skip to message
         </a>
         <Sidebar
+          onNewThread={() => void createThread()}
+          newThreadDisabled={!hostOnline || pending}
           threads={
             <ThreadList
               threads={state?.threads ?? []}

@@ -119,7 +119,11 @@ try {
   await page.goto(`${host.url}/#${host.browserToken}`);
   await submit("Create a skill about levels");
   await input.fill("Draft in first thread");
-  await nav.getByRole("button", { name: "New thread", exact: true }).click();
+  await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+  await expect(nav).not.toBeVisible();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await expect(input).toHaveValue("");
   await submit("Create a skill about walls");
   expect(histories).toEqual([[], []]);
@@ -268,6 +272,12 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await expect(nav).not.toBeVisible();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect(nav).not.toBeVisible();
+  await expect(page.getByText("Reply to Create a skill about levels", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open settings", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
   console.log(
     "Thread browser smoke passed: isolation, drafts, selection reload, archive/restore, live switching, multi-tab selection, contiguous pagination, old-run jumps, mobile.",

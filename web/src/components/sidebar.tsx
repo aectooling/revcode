@@ -7,6 +7,7 @@ import {
   KeyRound,
   PanelLeftClose,
   PanelLeftOpen,
+  Plus,
   Settings2,
   Terminal,
   X,
@@ -34,6 +35,8 @@ export type SidebarDocument = {
 };
 
 export type SidebarProps = {
+  onNewThread(): void;
+  newThreadDisabled: boolean;
   threads?: ReactNode;
   desktop?: DesktopState;
   vision: boolean;
@@ -355,6 +358,10 @@ export function Sidebar(props: SidebarProps) {
       {/* Mobile top bar */}
       <div className="flex items-center gap-2 px-3 py-2 lg:hidden">
         <Brand />
+        {!mobileOpen && <Button size="sm" variant="secondary" disabled={props.newThreadDisabled} onClick={props.onNewThread} aria-label="New thread" title="New thread">
+          <Plus className="size-3.5" />
+          <span className="max-sm:hidden">New thread</span>
+        </Button>}
         {!isDesktop && !mobileOpen && (
           <span
             className="flex min-w-0 shrink-0 items-center gap-1.5 text-[11px] text-muted"
@@ -408,6 +415,11 @@ export function Sidebar(props: SidebarProps) {
           >
             <PanelLeftOpen className="size-4" />
           </Button>
+          <Tooltip content="New thread">
+            <Button size="icon-sm" variant="ghost" disabled={props.newThreadDisabled} onClick={props.onNewThread} aria-label="New thread" title="New thread">
+              <Plus className="size-4" />
+            </Button>
+          </Tooltip>
           <Button
             size="icon-sm"
             variant="ghost"
