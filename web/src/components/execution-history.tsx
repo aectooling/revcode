@@ -2,31 +2,8 @@ import { toolLabel } from "../lib/tool-label";
 import { ChevronDown, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, ArrowUpRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HighlightedCode } from "./highlighted-code";
-export type Operation = {
-  operationId: string;
-  runId?: string;
-  executionMode?: string;
-  toolCallId?: string;
-  code?: string;
-  verify?: { code: string };
-  steps?: { name: string; code: string }[];
-  mode: "query" | "modify" | "api" | "batch";
-  status: string;
-  createdAt: string;
-  result?: unknown;
-  error?: string;
-  logs?: string[];
-  transactionStatus?: string;
-  elapsedMs?: number;
-  diagnostics?: {
-    stepName?: string;
-    stepIndex?: number;
-    severity: string;
-    message: string;
-    line?: number;
-    column?: number;
-  }[];
-};
+import type { Operation } from "../../../src/host/types";
+import type { RunSummary, RunDetail } from "../../../src/host/history-types";
 
 function ExecutionResult({ result, error }: { result?: unknown; error?: string }) {
   const value = error ? (result === undefined ? { error } : { error, result }) : result;
@@ -43,11 +20,6 @@ function OperationList({ operations }: { operations: Operation[] }) {
     </section>)}
   </div>;
 }
-
-export type RunSummary = import("../../../src/host/history-types").RunSummary;
-export type RunDetail = Omit<import("../../../src/host/history-types").RunDetail, "operations"> & {
-  operations: Operation[];
-};
 
 type Api = <T>(path: string, body?: unknown) => Promise<T>;
 export function ExecutionHistory({

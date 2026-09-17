@@ -136,12 +136,16 @@ function build(skipTests = false) {
   save(receiptPath(), receipt);
   save(join(dir, 'artifact.json'), { ...receipt, steps: undefined });
   writeFileSync(join(dir, 'SHA256SUMS'), `${receipt.sha256}  ${receipt.tarball}\n`);
-  writeFileSync(join(dir, 'release-notes.md'), `# Revcode ${receipt.version}\n\nSource: ${receipt.sourceCommit}\n\nRevcode binaries: ${receipt.signed ? 'signed' : 'unsigned'}.\n\nDescribe changes and known limitations before publication.\n`);
+  const notesPath = join(root, 'docs', 'releases', `${receipt.version}.md`);
+  const notes = existsSync(notesPath)
+    ? readFileSync(notesPath, 'utf8').trimEnd()
+    : `# Revcode ${receipt.version}\n\nDescribe changes and known limitations before publication.`;
+  writeFileSync(join(dir, 'release-notes.md'), `${notes}\n\nSource: ${receipt.sourceCommit}\n\nRevcode binaries: ${receipt.signed ? 'signed' : 'unsigned'}.\n`);
   if (!skipTests) {
     run(process.execPath, ['scripts/deployment/test-tarball.mjs', tarball], { cwd: root, inherit: true });
     receipt.steps.tarballTest = true; save(receiptPath(), receipt);
   }
-  console.log(`Prepared ${tarball}. Complete release-notes.md, then run pnpm run release:publish.`);
+  console.log(`Prepared ${tarball}. Review release-notes.md, then run pnpm run release:publish.`);
 }
 function prepared() {
   const receipt = json(receiptPath()), dir = directory();

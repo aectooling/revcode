@@ -11,18 +11,15 @@ import {
 } from "./components/console-panel";
 import { Conversation } from "./components/conversation";
 import { ThreadList } from "./components/thread-list";
-import {
-  ExecutionHistory,
-  type Operation,
-  type RunSummary,
-  type RunDetail,
-} from "./components/execution-history";
+import { ExecutionHistory } from "./components/execution-history";
+import type { RunSummary, RunDetail } from "../../src/host/history-types";
 import { ModelControls } from "./components/model-picker";
 import { ProviderDialog } from "./provider-dialog";
 import type {
   AuthState,
   Context,
   Message,
+  Operation,
   ProviderSummary,
   Settings,
   ThreadSummary,
@@ -303,15 +300,7 @@ function App() {
           ) {
             if (!next.threads?.some(thread => thread.id === selectedThreadId)) {
               threadDrafts.current.delete(selectedThreadId);
-              const draft = threadDrafts.current.get(next.selectedThreadId);
-              setPrompt(draft?.prompt ?? "");
-              setImages(draft?.images ?? []);
-              setSelectedSkills(draft?.skills ?? []);
-              setAuthoringDraft(draft?.authoring);
-              setOlderMessages([]);
-              setOlderAvailable(undefined);
-              setSelectedRun("");
-              setJumpMessageId("");
+              restoreThreadDraft(next.selectedThreadId);
             }
             selectedThreadRef.current = next.selectedThreadId;
             setSelectedThreadId(next.selectedThreadId);
@@ -440,6 +429,17 @@ function App() {
     );
     if (selectedThreadRef.current === id) setState(next);
   }
+  function restoreThreadDraft(id: string) {
+    const draft = threadDrafts.current.get(id);
+    setPrompt(draft?.prompt ?? "");
+    setImages(draft?.images ?? []);
+    setSelectedSkills(draft?.skills ?? []);
+    setAuthoringDraft(draft?.authoring);
+    setOlderMessages([]);
+    setOlderAvailable(undefined);
+    setSelectedRun("");
+    setJumpMessageId("");
+  }
   function selectThread(id: string) {
     if (pending || id === selectedThreadId) return;
     threadDrafts.current.set(selectedThreadId, {
@@ -448,17 +448,9 @@ function App() {
       skills: selectedSkills,
       authoring: authoringDraft,
     });
-    const draft = threadDrafts.current.get(id);
-    setPrompt(draft?.prompt ?? "");
-    setImages(draft?.images ?? []);
-    setSelectedSkills(draft?.skills ?? []);
-    setAuthoringDraft(draft?.authoring);
+    restoreThreadDraft(id);
     selectedThreadRef.current = id;
     setSelectedThreadId(id);
-    setOlderMessages([]);
-    setOlderAvailable(undefined);
-    setSelectedRun("");
-    setJumpMessageId("");
     setMobileOpen(false);
   }
   async function createThread() {

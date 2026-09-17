@@ -42,6 +42,8 @@ unpruned dependency package.
 
 ## Browser tree-shaking
 
+The following browser measurements are also from the 0.1.1 build, before image annotation was added. They are historical comparisons, not current release sizes.
+
 Inspection of Vite's emitted chunk module lists found 32 Lucide icon modules,
 not the complete icon catalog. Shiki includes only C# and JSON grammars, one theme,
 and its Oniguruma engine. Highlighting is loaded separately. The largest emitted
