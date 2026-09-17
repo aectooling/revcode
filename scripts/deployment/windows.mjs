@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { toNamespacedPath } from 'node:path';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 export function powershell(script, values = {}) {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n${script}`, 'utf16le').toString('base64')], {
@@ -55,8 +56,18 @@ ConvertTo-Json -InputObject $entries
 }
 
 export function extract(archive, destination) {
-  powershell(`[AppContext]::SetSwitch('Switch.System.IO.UseLegacyPathHandling', $false)
-[AppContext]::SetSwitch('Switch.System.IO.BlockLongPaths', $false)
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::ExtractToDirectory($env:REVCODE_ARCHIVE, $env:REVCODE_DESTINATION)`, { REVCODE_ARCHIVE: toNamespacedPath(archive), REVCODE_DESTINATION: toNamespacedPath(destination) });
+  // Use Windows' ZIP-capable bsdtar, independent of PowerShell/.NET legacy
+  // path handling. Select the system binary rather than a PATH-provided tar.
+  if (!process.env.SystemRoot) throw new Error('Missing Windows environment variable: SystemRoot');
+  mkdirSync(destination, { recursive: true });
+  // Node opens Unicode paths without tar's command-line code-page conversion.
+  const fd = openSync(archive, 'r');
+  let result;
+  try {
+    result = spawnSync(join(process.env.SystemRoot, 'System32', 'tar.exe'), ['-xf', '-'], {
+      cwd: resolve(destination), stdio: [fd, 'pipe', 'pipe'],
+      windowsHide: true, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+    });
+  } finally { closeSync(fd); }
+  if (result.error || result.status !== 0) throw new Error(`Payload extraction failed: ${result.error?.message || result.stderr?.trim() || `tar exited with status ${result.status}`}`);
 }
