@@ -110,7 +110,7 @@ For reload conflicts, the overload accepting `new RevitUIFamilyLoadOptions()` ca
 
 ## Visual inspection
 
-Use the composer's **Attach images**, **New drawing**, and **Capture active view** buttons to send visual instructions. Paste or drop PNG, JPEG, WebP, or GIF files (up to four images, 5 MiB each). Click an attachment to annotate it with Excalidraw arrows, shapes, text, or freehand strokes; the image opacity slider helps trace reference images. Drawings can be reopened and edited before sending. The editor and fonts load locally, with no external drawing service.
+Use the composer's **Attach images**, **New drawing**, and **Capture active view** buttons to send visual instructions. Paste or drop PNG, JPEG, WebP, or GIF files (up to four images, 5 MiB each). Click an attachment to annotate it with Excalidraw arrows, shapes, text, or freehand strokes; the image opacity slider helps trace reference images. Drawings can be reopened and edited before sending. Oversized Revit captures are resized automatically to fit the attachment limit. The editor and fonts load locally, with no external drawing service.
 
 Sending images requires an image-capable model. Attachments remain visible in recorded conversations under the existing history retention limits; reattach images when a later turn needs them. Unsent drawing scenes stay in the current browser page and are lost on reload.
 

@@ -45,3 +45,32 @@ export async function readImage(file: File): Promise<DraftImage> {
 	});
 	return { id: randomId(), name: file.name || "Pasted image", ...dimensions, image, original: image };
 }
+
+// Native view exports may be up to 10 MiB. Fit captures to the chat budget
+// without weakening the upload limit or asking the user to resize a Revit view.
+export async function readCapturedImage(image: ImageAttachment): Promise<DraftImage> {
+  const bytes = Uint8Array.from(atob(image.data), character => character.charCodeAt(0));
+  const name = "Active Revit view.png";
+  if (bytes.byteLength <= MAX_IMAGE_BYTES) return readImage(new File([bytes], name, { type: image.mimeType }));
+  const source = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("The captured view could not be opened."));
+    element.src = imageUrl(image);
+  });
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not prepare the captured view.");
+  let maximum = Math.min(2048, Math.max(source.naturalWidth, source.naturalHeight));
+  while (true) {
+    const scale = maximum / Math.max(source.naturalWidth, source.naturalHeight);
+    canvas.width = Math.max(1, Math.round(source.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(source.naturalHeight * scale));
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error("Could not resize the captured view.")), "image/png"));
+    if (blob.size <= MAX_IMAGE_BYTES) return readImage(new File([blob], name, { type: "image/png" }));
+    if (maximum <= 128) throw new Error("Could not fit the captured view within 5 MB.");
+    maximum = Math.max(128, Math.floor(maximum * 0.75));
+  }
+}

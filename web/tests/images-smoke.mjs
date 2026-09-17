@@ -4,13 +4,18 @@ import { Dealer } from 'zeromq';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
-import { createHost } from '../../dist/host/server.js';
+import { pathToFileURL } from 'node:url';
+
+// Set REVCODE_TEST_PAYLOAD to exercise the actual staged runtime and web assets.
+const payload = resolve(process.env.REVCODE_TEST_PAYLOAD || '.');
+const { createHost } = await import(pathToFileURL(join(payload, 'dist/host/server.js')).href);
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=';
 const dir = await mkdtemp(join(tmpdir(), 'revcode-images-'));
 let finish;
 let receivedImages;
-const host = await createHost({ instanceId: 'images', nativeToken: 'fixture', dataDir: dir, webDir: resolve('dist/web'), agent: {
+let capturedPng = png;
+const host = await createHost({ instanceId: 'images', nativeToken: 'fixture', dataDir: dir, webDir: join(payload, 'dist/web'), agent: {
   providers: [{ id: 'anthropic', models: [{ id: 'vision', name: 'Vision', supportsImages: true }] }],
   configured: () => true, setKey: async () => {}, abort: async () => finish?.(),
   prompt: async (_text, _settings, _context, _history, _execute, update, _desktop, _services, images) => {
@@ -30,7 +35,7 @@ const nativeLoop = (async () => {
     const { command } = JSON.parse(frame.toString());
     if (command?.kind !== 'execute') continue;
     const path = command.code.match(/FilePath = @"([^"]+)"/)[1];
-    await writeFile(path + '.png', Buffer.from(png, 'base64'));
+    await writeFile(path + '.png', Buffer.from(capturedPng, 'base64'));
     await send('operation', { operationId: command.operationId, status: 'succeeded', result: { viewName: '3D' } });
   } } catch { /* teardown */ }
 })();
@@ -65,7 +70,7 @@ try {
   await page.mouse.up();
   await page.keyboard.press('t');
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2 + 100);
-  await page.keyboard.insertText('Drawing note');
+  await page.keyboard.insertText('Drawing note 建築');
   await page.keyboard.press('Escape');
   await mkdir('.local', { recursive: true });
   await page.screenshot({ path: '.local/images-drawing.png' });
@@ -74,6 +79,20 @@ try {
   await page.getByRole('button', { name: 'Annotate Drawing.png' }).click();
   await expect(page.getByRole('heading', { name: 'Edit drawing' })).toBeVisible();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  // An ordinary 1536px native export can exceed the 5 MiB attachment limit.
+  capturedPng = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1536;
+    const ctx = canvas.getContext('2d'); const data = ctx.createImageData(1536, 1536);
+    let seed = 123456789;
+    for (let i = 0; i < data.data.length; i += 4) {
+      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+      data.data[i] = seed & 255; data.data[i + 1] = (seed >>> 8) & 255;
+      data.data[i + 2] = (seed >>> 16) & 255; data.data[i + 3] = 255;
+    }
+    ctx.putImageData(data, 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  expect(Buffer.byteLength(capturedPng, 'base64')).toBeGreaterThan(5 * 1024 * 1024);
   await page.getByRole('button', { name: 'Capture active view', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Annotate Active Revit view.png' })).toBeVisible();
   await page.getByRole('button', { name: 'Annotate Active Revit view.png' }).click();
@@ -83,6 +102,7 @@ try {
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect.poll(() => receivedImages?.length).toBe(3);
   expect(receivedImages).toHaveLength(3);
+  expect(Buffer.byteLength(receivedImages[2].data, 'base64')).toBeLessThanOrEqual(5 * 1024 * 1024);
   await expect(page.getByLabel('Image attachments')).toHaveCount(0);
   await expect(page.getByAltText('Attached image 3', { exact: true })).toBeVisible();
   await page.reload();

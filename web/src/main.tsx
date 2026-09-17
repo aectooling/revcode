@@ -44,7 +44,7 @@ import {
 } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { providerLabel } from "./lib/utils";
-import { readImage, type DraftImage } from "./lib/image-attachments";
+import { readCapturedImage, type DraftImage } from "./lib/image-attachments";
 import type { ImageAttachment } from "../../src/host/images";
 import mark from "./assets/revcode-mark.svg";
 import { Loader2, TriangleAlert } from "lucide-react";
@@ -628,8 +628,7 @@ function App() {
             captureDisabled={!canExecute || !doc || authoringRequest}
             onCapture={async () => {
               const result = await api<{ image: ImageAttachment }>("/api/capture-view", {});
-              const bytes = Uint8Array.from(atob(result.image.data), character => character.charCodeAt(0));
-              return readImage(new File([bytes], "Active Revit view.png", { type: result.image.mimeType }));
+              return readCapturedImage(result.image);
             }}
             submitDisabled={!canChat || !state?.settings.configured || (images.length > 0 && !supportsImages)}
             alert={
