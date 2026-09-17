@@ -85,8 +85,14 @@ try {
     [ordered]@{ nodePath='runtime/node.exe'; hostPath='dist/host/index.js'; compilerPath='compiler/Revcode.Compiler.exe'; desktopPath='desktop/Revcode.Desktop.exe' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'runtime.json') -Encoding UTF8
     $sourceCommit = (& git rev-parse HEAD).Trim()
     [ordered]@{ version=$packageVersion; builtAt=[DateTime]::UtcNow.ToString('o'); sourceCommit=$sourceCommit; revitYears=@($RevitYears); targets=$matrix; nodeVersion=$nodeVersion; dataSchema=$config.dataSchema; signed=[bool]$Sign } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $packageRoot 'package-info.json') -Encoding UTF8
+    Invoke-Checked 'node' @('scripts/deployment/prune-payload.mjs', $packageRoot)
     Push-Location $packageRoot
     try { Invoke-Checked (Join-Path $runtimeOutput 'node.exe') @('--input-type=module', '-e', "import {Router} from 'zeromq'; const r = new Router(); await r.bind('tcp://127.0.0.1:*'); r.close(); console.log('Packaged ZeroMQ OK');") } finally { Pop-Location }
+    $previousTestPayload = [Environment]::GetEnvironmentVariable('REVCODE_TEST_PAYLOAD')
+    try {
+        $env:REVCODE_TEST_PAYLOAD = $packageRoot
+        Invoke-Checked 'npm.cmd' @('run', 'test:payload')
+    } finally { $env:REVCODE_TEST_PAYLOAD = $previousTestPayload }
     Invoke-Checked 'node' @('scripts/deployment/assemble.mjs', $packageRoot, ($packageRoot + '-npm'))
     Write-Host "Package ready: $packageRoot"
 } finally { Pop-Location }
