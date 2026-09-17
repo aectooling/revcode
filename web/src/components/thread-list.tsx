@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ChevronDown, Plus } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, Ellipsis, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/host/types";
 import { Button } from "./ui/button";
@@ -12,6 +12,9 @@ export function ThreadList({
   onSelect,
   onCreate,
   onArchive,
+  onDelete,
+  onManageArchived,
+  protectedIds = [],
 }: {
   threads: ThreadSummary[];
   selectedId: string;
@@ -20,6 +23,9 @@ export function ThreadList({
   onSelect(id: string): void;
   onCreate(): void;
   onArchive(thread: ThreadSummary): void;
+  onDelete(thread: ThreadSummary): void;
+  onManageArchived(): void;
+  protectedIds?: string[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now);
@@ -99,6 +105,9 @@ export function ThreadList({
           <Archive className="size-3.5" />
         )}
       </button>
+      <button type="button" disabled={!online || activeId === row.id || protectedIds.includes(row.id)} aria-label={`Delete ${row.title}`} title={activeId === row.id || protectedIds.includes(row.id) ? "Stop the thread and resolve pending outcomes first" : "Delete permanently"} onClick={() => onDelete(row)} className="mr-1 rounded p-1.5 text-muted hover:text-danger disabled:opacity-40">
+        <Trash2 className="size-3.5" />
+      </button>
     </div>
   );
   const archived = rows.filter((row) => row.archivedAt);
@@ -129,8 +138,8 @@ export function ThreadList({
           </section>
         ) : null;
       })}
-      {archived.length > 0 && (
-        <section className="mt-2 border-t border-line pt-1">
+      <section className="mt-2 border-t border-line pt-1">
+          <div className="flex items-center">
           <button
             type="button"
             onClick={() => setExpanded(!expanded)}
@@ -143,6 +152,8 @@ export function ThreadList({
               className={cn("ml-auto size-3.5", expanded && "rotate-180")}
             />
           </button>
+          <button type="button" aria-label="Manage archived threads" title="Manage archived threads" onClick={onManageArchived} className="shrink-0 rounded p-1.5 text-muted hover:bg-surface hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/40"><Ellipsis className="size-4" /></button>
+          </div>
           {expanded && (
             <>
               <p className="px-2 pb-1 text-[10px] text-muted">
@@ -151,8 +162,7 @@ export function ThreadList({
               {archived.map(renderRow)}
             </>
           )}
-        </section>
-      )}
+      </section>
     </nav>
   );
 }

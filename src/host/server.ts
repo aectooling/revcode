@@ -46,6 +46,7 @@ class HttpError extends Error {
 }
 interface Persisted {
   threads?: ThreadSummary[];
+  deletedThreadIds?: string[];
   version?: number;
   messages: Message[];
   operations: Operation[];
@@ -123,6 +124,21 @@ export async function createHost(options: HostOptions) {
     ).values(),
   ];
   const runs = await RunHistory.open(resolve(options.dataDir, "runs"));
+  // Journal tombstones are saved before removing evidence. Finish an interrupted
+  // deletion before importing run or legacy messages on restart.
+  async function removeThreadEvidence(ids: string[]) {
+    const deleted = new Set(ids);
+    const runIds = new Set([...runs.summaries.values()].filter(run => deleted.has(run.threadId ?? "legacy")).map(run => run.id));
+    const belongs = (message: Message) => deleted.has(message.threadId ?? (message.runId ? runs.summaries.get(message.runId)?.threadId : undefined) ?? "legacy");
+    legacy.messages = legacy.messages.filter(message => !belongs(message));
+    legacy.operations = legacy.operations.filter(operation => !operation.runId || !runIds.has(operation.runId));
+    await writeFile(`${legacyFile}.tmp`, JSON.stringify(legacy), { mode: 0o600 });
+    await rename(`${legacyFile}.tmp`, legacyFile);
+    state.messages = state.messages.filter(message => !belongs(message));
+    state.operations = state.operations.filter(operation => !operation.runId || !runIds.has(operation.runId));
+    for (const id of ids) await runs.deleteThread(id);
+  }
+  if (state.deletedThreadIds?.length) await removeThreadEvidence(state.deletedThreadIds);
   for (const summary of [...runs.summaries.values()].sort(
     (a, b) => a.number - b.number,
   )) {
@@ -290,6 +306,9 @@ export async function createHost(options: HostOptions) {
     auth,
     ...state,
     requests: undefined,
+    deletedThreadIds: undefined,
+    historyStorage: { journalPath: journal, runsPath: resolve(options.dataDir, "runs") },
+    protectedThreadIds: [...new Set([...runs.summaries.values()].filter(run => run.status === "running" || runs.protected.has(run.id) || state.operations.some(operation => operation.runId === run.id && !terminal.has(operation.status))).map(run => run.threadId ?? "legacy"))],
     selectedThreadId: threadId,
     activeThreadId: activeRun?.run.threadId,
     runs: runs.list({ limit: 50, threadId }).runs,
@@ -567,6 +586,41 @@ export async function createHost(options: HostOptions) {
         throw new HttpError(503, storageError);
       }
       send(res, 200, thread);
+      broadcast();
+      return;
+    }
+    if (path === "/api/threads/delete") {
+      if (storageError) throw new HttpError(503, storageError);
+      if (!Array.isArray(data.threadIds) || !data.threadIds.length || data.threadIds.length > 500 || data.threadIds.some((id: unknown) => typeof id !== "string"))
+        throw new HttpError(400, "Expected 1–500 thread IDs.");
+      if (data.archivedOnly !== undefined && typeof data.archivedOnly !== "boolean") throw new HttpError(400, "Expected archivedOnly boolean.");
+      if (data.before !== undefined && data.before !== null && (typeof data.before !== "number" || !Number.isFinite(data.before))) throw new HttpError(400, "Invalid cutoff.");
+      const ids = new Set<string>(data.threadIds);
+      const targets = [...ids].map(findThread);
+      const targetRuns = [...runs.summaries.values()].filter(run => ids.has(run.threadId ?? "legacy"));
+      const runIds = new Set(targetRuns.map(run => run.id));
+      if ((activeRun && ids.has(activeRun.run.threadId ?? "legacy")) || targetRuns.some(run => run.status === "running" || runs.protected.has(run.id)) || state.operations.some(operation => operation.runId && runIds.has(operation.runId) && !terminal.has(operation.status)))
+        throw new HttpError(409, "Stop the thread and resolve pending outcomes before deleting it.");
+      if (data.archivedOnly && targets.some(thread => !thread.archivedAt || (data.before != null && Date.parse(thread.updatedAt) >= data.before)))
+        throw new HttpError(409, "Archived threads changed. Review the selection again.");
+      // Persist deletion intent first, so an interrupted cleanup cannot resurrect logs.
+      state.deletedThreadIds = [...new Set([...(state.deletedThreadIds ?? []), ...ids])];
+      state.messages = state.messages.filter(message => !ids.has(messageThread(message)));
+      state.operations = state.operations.filter(operation => !operation.runId || !runIds.has(operation.runId));
+      for (const thread of targets) threads.splice(threads.indexOf(thread), 1);
+      for (const [key, request] of Object.entries(state.requests)) {
+        const response = request.response as { id?: string; runId?: string; threadId?: string };
+        if ((response.id && ids.has(response.id)) || (response.threadId && ids.has(response.threadId)) || (response.runId && runIds.has(response.runId))) delete state.requests[key];
+      }
+      if (!threads.length) threads.push({ id: randomUUID(), title: "New thread", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      try {
+        await persist();
+        await removeThreadEvidence([...ids]);
+      } catch {
+        storageError = "Thread deletion could not finish. Check the data directory and restart the host to complete cleanup.";
+        throw new HttpError(503, storageError);
+      }
+      send(res, 200, { deleted: [...ids] });
       broadcast();
       return;
     }
