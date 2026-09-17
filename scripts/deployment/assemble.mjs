@@ -1,7 +1,8 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { digest, inventory, json, save, verify } from './files.mjs';
 import { powershell } from './windows.mjs';
+import { measurePayload } from './measure-payload.mjs';
 
 const [payloadArg, outputArg] = process.argv.slice(2);
 if (!payloadArg || !outputArg) throw new Error('Usage: assemble.mjs <payload> <distribution-directory>');
@@ -30,4 +31,8 @@ powershell(`Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($env:REVCODE_PAYLOAD, $env:REVCODE_ARCHIVE, [IO.Compression.CompressionLevel]::Optimal, $false)`,
 { REVCODE_PAYLOAD: payload, REVCODE_ARCHIVE: join(output, 'payload.zip') });
 save(join(output, 'payload-index.json'), { version: info.version, sha256: digest(readFileSync(join(output, 'payload.zip'))), targets: info.targets });
+const sizes = { ...measurePayload(payload), archiveBytes: statSync(join(output, 'payload.zip')).size };
+// Build evidence stays beside the distribution; it is not installed or published.
+save(join(output, 'size-report.json'), sizes);
+console.log(`Payload: ${(sizes.bytes / 1024 ** 2).toFixed(2)} MiB in ${sizes.files} files; archive: ${(sizes.archiveBytes / 1024 ** 2).toFixed(2)} MiB`);
 console.log(`Distribution ready: ${output}`);

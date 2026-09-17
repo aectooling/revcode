@@ -34,6 +34,8 @@ pnpm remove -g @aectooling/revcode
 
 Node 22.19+ is needed for package-manager and CLI bootstrap execution. The application uses bundled Node. The distribution embeds `payload.zip`, containing all production dependencies, native ZeroMQ, add-ins, host/UI, and self-contained compiler/desktop helpers. Installation never builds or downloads a secondary payload. Package-manager lifecycle policies do not affect the explicit CLI installer.
 
+Packaging omits dependency source maps/type declarations and non-Windows-x64 ZeroMQ binaries, then tests the staged host before sealing its integrity inventory. Each distribution build also writes a build-only `size-report.json`. See [package size measurements and limits](PACKAGE-SIZE.md) for the component breakdown, tree-shaking review, and validation commands.
+
 The immutable payload is installed in `%LOCALAPPDATA%\Revcode\packages\<version>`. Per-user manifests live in `%APPDATA%\Autodesk\Revit\Addins\<year>\Revcode.addin`. pnpm's global directory is independent of the running application.
 
 Missing/unsupported Revit and running Revit produce successful staging with pending registration. Run `revcode install` after closing Revit or installing a supported update. Corruption, ownership conflicts, and filesystem failures exit nonzero. No process is terminated or elevated automatically.

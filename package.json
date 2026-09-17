@@ -14,6 +14,7 @@
     "build:web": "vite build --config web/vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "vitest run",
+    "test:payload": "vitest run --config vitest.payload.config.ts",
     "test:native": "dotnet test dotnet/Revcode.Tests/Revcode.Tests.csproj -c Release",
     "test:transport": "dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=8 -p:RestoreLockedMode=true && dotnet run --project dotnet/Revcode.TransportSmoke/Revcode.TransportSmoke.csproj -c Release -p:RevitRuntime=10 -p:RestoreLockedMode=true",
     "test:browser": "node web/tests/browser-smoke.mjs",
