@@ -23,7 +23,8 @@ var doc = ctx.Doc;
 var view = ${input.viewId ? `doc.GetElement(${literal(input.viewId)}) as View` : 'doc.ActiveView'};
 if (view == null || view.IsTemplate || !view.CanBePrinted)
     return new { captureError = "Choose an exportable non-template view using a C# view query." };
-${input.region === 'visible' ? `if (ctx.UiDoc == null || ctx.UiDoc.Document != doc || ctx.UiDoc.ActiveView.Id != view.Id)
+${input.region === 'visible' ? `// Revit can return distinct managed wrappers for the same native document.
+if (ctx.UiDoc == null || !ctx.UiDoc.Document.Equals(doc) || ctx.UiDoc.ActiveView.Id != view.Id)
     return new { captureError = "Visible capture requires this document and view to be active. Request a view change in a separate API call, then verify activation before capturing." };
 ctx.UiDoc.RefreshActiveView();` : ''}
 ctx.CheckCancellation();
