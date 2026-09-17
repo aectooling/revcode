@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHost } from "../../src/host/server.js";
@@ -56,12 +56,14 @@ async function fixture(
     (await api(`state?threadId=${id}`)).json();
   const idle = () => expect.poll(() => host.snapshot().chatBusy).toBe(false);
   return {
+    dir,
     api,
     state,
     idle,
-    restart: async () => {
+    restart: async (beforeOpen?: () => Promise<void>) => {
       await idle();
       await host.close();
+      await beforeOpen?.();
       host = await createHost(options);
     },
   };
@@ -227,4 +229,94 @@ it("migrates existing messages and pages older history without mixing threads", 
       })
     ).status,
   ).toBe(404);
+});
+
+
+it("permanently deletes a completed thread and its runs without affecting another thread", async () => {
+  const f = await fixture();
+  const other = await (await f.api("threads", { requestId: "delete-kept-thread" })).json();
+  for (const id of ["legacy", other.id]) {
+    expect((await f.api("chat", { threadId: id, text: `Saved ${id}`, requestId: `delete-message-${id}`, mode: "authoring" })).status).toBe(202);
+    await f.idle();
+  }
+  const before = await f.state("legacy");
+  expect(before.historyStorage.journalPath).toBe(join(f.dir, "journal.json"));
+  const runId = before.runs[0].id;
+  const detailPath = join(f.dir, "runs", `${runId}.detail.json`);
+  const detail = JSON.parse(await readFile(detailPath, "utf8"));
+  detail.messages[0].images = [{ artifact: "delete-me.png", mimeType: "image/png" }];
+  await writeFile(join(f.dir, "runs", "artifacts", "delete-me.png"), "fixture image");
+  await writeFile(detailPath, JSON.stringify(detail));
+  expect((await f.api("threads/delete", { threadIds: ["legacy"] })).status).toBe(200);
+  expect((await f.api(`runs/${runId}`)).status).toBe(404);
+  expect(await readdir(join(f.dir, "runs", "artifacts"))).not.toContain("delete-me.png");
+  expect((await readdir(join(f.dir, "runs"))).some(name => name.startsWith(runId))).toBe(false);
+  await f.restart();
+  const after = await f.state("legacy");
+  expect(after.selectedThreadId).toBe(other.id);
+  expect(after.threads.map((thread: { id: string }) => thread.id)).toEqual([other.id]);
+  expect(after.messages.map((message: Message) => message.text)).toEqual([`Saved ${other.id}`, "Saved reply"]);
+  expect((await f.api("threads/delete", { threadIds: [other.id] })).status).toBe(200);
+  await f.restart();
+  const empty = await f.state(other.id);
+  expect(empty.threads).toHaveLength(1);
+  expect(empty.selectedThreadId).not.toBe(other.id);
+  expect(empty.messages).toEqual([]);
+});
+
+it("validates the entire archived deletion selection before deleting anything", async () => {
+  const f = await fixture();
+  const other = await (await f.api("threads", { requestId: "purge-kept-thread" })).json();
+  await f.api("threads/archive", { threadId: "legacy", archived: true });
+  expect((await f.api("threads/delete", { threadIds: ["legacy", other.id], archivedOnly: true, before: null })).status).toBe(409);
+  expect((await f.state("legacy")).threads).toHaveLength(2);
+  expect((await f.api("threads/delete", { threadIds: ["legacy"], archivedOnly: true, before: 0 })).status).toBe(409);
+  expect((await f.api("threads/delete", { threadIds: ["legacy"], archivedOnly: true, before: Date.now() + 1000 })).status).toBe(200);
+});
+
+it("rejects deleting a running thread", async () => {
+  let finish!: () => void;
+  const f = await fixture(async () => { await new Promise<void>(resolve => { finish = resolve; }); });
+  try {
+    await f.api("chat", { threadId: "legacy", text: "Wait", requestId: "delete-running-message", mode: "authoring" });
+    await expect.poll(() => typeof finish).toBe("function");
+    expect((await f.api("threads/delete", { threadIds: ["legacy"] })).status).toBe(409);
+    expect((await f.state("legacy")).threads).toHaveLength(1);
+  } finally { finish?.(); await f.idle(); }
+});
+
+
+it("completes persisted deletion intent before restoring saved transcripts", async () => {
+  const f = await fixture();
+  const kept = await (await f.api("threads", { requestId: "recovery-kept-thread" })).json();
+  await f.api("chat", { threadId: "legacy", text: "Remove after interrupted deletion", requestId: "recovery-delete-message", mode: "authoring" });
+  await f.idle();
+  const runId = (await f.state("legacy")).runs[0].id;
+  await f.restart(async () => {
+    const path = join(f.dir, "journal.json");
+    const journal = JSON.parse(await readFile(path, "utf8"));
+    journal.deletedThreadIds = ["legacy"];
+    journal.threads = journal.threads.filter((thread: { id: string }) => thread.id !== "legacy");
+    await writeFile(path, JSON.stringify(journal));
+  });
+  const state = await f.state("legacy");
+  expect(state.selectedThreadId).toBe(kept.id);
+  expect(state.messages).toEqual([]);
+  expect((await f.api(`runs/${runId}`)).status).toBe(404);
+});
+
+
+it("excludes unresolved native outcomes from thread deletion and exposes that protection", async () => {
+  const f = await fixture();
+  await f.api("chat", { threadId: "legacy", text: "Recorded work", requestId: "delete-unknown-outcome", mode: "authoring" });
+  await f.idle();
+  const runId = (await f.state("legacy")).runs[0].id;
+  await f.restart(async () => {
+    const path = join(f.dir, "runs", `${runId}.detail.json`);
+    const detail = JSON.parse(await readFile(path, "utf8"));
+    detail.operations.push({ operationId: "unknown-operation", runId, mode: "query", code: "return null;", documentToken: null, createdAt: new Date().toISOString(), status: "unknown" });
+    await writeFile(path, JSON.stringify(detail));
+  });
+  expect((await f.state("legacy")).protectedThreadIds).toContain("legacy");
+  expect((await f.api("threads/delete", { threadIds: ["legacy"] })).status).toBe(409);
 });

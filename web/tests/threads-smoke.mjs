@@ -119,7 +119,11 @@ try {
   await page.goto(`${host.url}/#${host.browserToken}`);
   await submit("Create a skill about levels");
   await input.fill("Draft in first thread");
-  await nav.getByRole("button", { name: "New thread", exact: true }).click();
+  await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+  await expect(nav).not.toBeVisible();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Expand sidebar", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await expect(input).toHaveValue("");
   await submit("Create a skill about walls");
   expect(histories).toEqual([[], []]);
@@ -268,6 +272,41 @@ try {
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await expect(nav).not.toBeVisible();
+  await page.getByRole("button", { name: "New thread", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await expect(nav).not.toBeVisible();
+  await expect(page.getByText("Reply to Create a skill about levels", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open settings", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await nav.getByRole("button", { name: /Inactive Create a skill about levels/ }).click();
+  await input.fill("Discard this thread draft");
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await nav.getByRole("button", { name: "Delete Create a skill about levels", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("cannot be undone");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await expect(nav.getByRole("button", { name: /Inactive Create a skill about levels/ })).toBeVisible();
+  await nav.getByRole("button", { name: "Delete Create a skill about levels", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete thread", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(input).toHaveValue("");
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await expect(nav.getByRole("button", { name: /Inactive Create a skill about levels/ })).toHaveCount(0);
+  await nav.getByRole("button", { name: "Archive Create a skill about walls", exact: true }).click();
+  await nav.getByRole("button", { name: "Manage archived threads", exact: true }).click();
+  await expect(dialog).toContainText("Saved on this host");
+  await expect(dialog).toContainText(join(dataDir, "journal.json"));
+  await expect(dialog).toContainText(join(dataDir, "runs"));
+  await dialog.getByLabel("Delete archived threads", { exact: true }).selectOption("all");
+  await expect(dialog).toContainText("1 archived thread matches.");
+  await dialog.getByRole("button", { name: "Review deletion", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete 1 thread", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Open settings", exact: true }).click();
+  await expect(nav.getByRole("button", { name: /Inactive Create a skill about (walls|levels)/ })).toHaveCount(0);
   expect(errors).toEqual([]);
   console.log(
     "Thread browser smoke passed: isolation, drafts, selection reload, archive/restore, live switching, multi-tab selection, contiguous pagination, old-run jumps, mobile.",

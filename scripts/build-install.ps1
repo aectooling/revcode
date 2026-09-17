@@ -23,7 +23,7 @@ Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-install
   -Help        Show this help.
 
 Close Revit before installing. The installer replaces the registered
-per-user add-in without prompting.
+per-user add-in without prompting, including rebuilt packages with the same version.
 '@
     exit 0
 }
@@ -58,7 +58,7 @@ try {
         Write-Host "[revcode] Build and verification passed. Package files: $stage"
     } else {
         Write-Host '[revcode] Installing the staged package'
-        & (Join-Path $PSScriptRoot 'install.ps1') -PackagePath $stage
+        & (Join-Path $PSScriptRoot 'install.ps1') -PackagePath $stage -ReplaceSameVersion
         Write-Host "[revcode] Installed revcode $version. Open Revit, open a project, and click Add-Ins > Revcode."
         if ($OpenRevit) {
             foreach ($year in ($years | Sort-Object -Descending)) {

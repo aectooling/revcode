@@ -2,6 +2,8 @@
 
 Revcode is MIT-licensed; see LICENSE.
 
+The chat run timer and tool-card presentation are adapted from [HopperCode](https://github.com/tsoumdoa/hoppercode), copyright (c) 2026 tsoumdoa, under the MIT license reproduced below.
+
 Production packages include third-party dependencies with their own licenses. License and notice files from npm dependencies remain under `node_modules`. Node's license and included third-party notices are copied to `runtime/NODE-LICENSE.txt`.
 
 Native dependencies include Microsoft.CodeAnalysis.CSharp (Roslyn), .NET runtime components, NetMQ, AsyncIO, NaCl.Net, and the packages listed by the projects' NuGet dependency graphs. NetMQ is LGPL-3.0 with its additional linking exception; its NuGet/repository license governs that dependency, not Revcode's MIT license. Corresponding upstream sources are available from [NetMQ](https://github.com/zeromq/netmq), [AsyncIO](https://github.com/somdoron/AsyncIO), [NaCl.Net](https://github.com/somdoron/NaCl.net), and [Roslyn](https://github.com/dotnet/roslyn). The native assemblies are shipped as separate DLLs without modification.

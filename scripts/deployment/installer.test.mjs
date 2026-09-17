@@ -114,3 +114,58 @@ test('cleanup can finish a partially deleted unreferenced payload', t => {
   rmSync(join(f.installer.payload('1.0.0'), 'compiler/Revcode.Compiler.exe'));
   assert.deepEqual(f.installer.cleanup().removed, ['1.0.0']);
 });
+
+
+test('local same-version replacement preserves per-year builds and supports rollback', t => {
+  const f = fixture(t), source = f.payload('1.0.0');
+  f.installer.install(source);
+  const original = f.installer.state().years['2025'].active;
+  writeFileSync(join(source, 'dist/host/index.js'), 'rebuilt');
+  save(join(source, 'integrity.json'), inventory(source));
+  const result = f.installer.install(source, ['2025'], { replaceSameVersion: true });
+  assert.deepEqual(result.registered, ['2025']);
+  const current = f.installer.state().years['2025'];
+  assert.equal(current.active.version, '1.0.0');
+  assert.match(current.active.payloadVersion, /^1\.0\.0-local-/);
+  assert.deepEqual(current.previous, original);
+  assert.equal(f.installer.state().years['2026'].active.payloadVersion, undefined);
+  assert.equal(readFileSync(join(f.installer.payload(current.active.payloadVersion), 'dist/host/index.js'), 'utf8'), 'rebuilt');
+  assert.equal(readFileSync(join(f.installer.payload('1.0.0'), 'dist/host/index.js'), 'utf8'), '1.0.0');
+  assert.deepEqual(f.installer.doctor().problems, []);
+  f.installer.install(source, ['2025'], { replaceSameVersion: true });
+  assert.deepEqual(f.installer.state().years['2025'], current);
+  f.installer.rollback(['2025']);
+  assert.deepEqual(f.installer.state().years['2025'].active, original);
+  f.installer.rollback(['2025']);
+  assert.deepEqual(f.installer.state().years['2025'].active, current.active);
+  f.installer.uninstall();
+  assert.equal(existsSync(f.installer.payload(current.active.payloadVersion)), false);
+});
+
+test('same-version activation failure restores the previous build and manifests', t => {
+  const f = fixture(t), source = f.payload('1.0.0');
+  f.installer.install(source);
+  const before = f.installer.state();
+  writeFileSync(join(source, 'dist/host/index.js'), 'replacement');
+  save(join(source, 'integrity.json'), inventory(source));
+  const faulty = new Installer({ ...f.options, checkpoint: () => { throw new Error('Injected activation failure'); } });
+  assert.throws(() => faulty.install(source, undefined, { replaceSameVersion: true }), /Injected activation failure/);
+  assert.deepEqual(f.installer.state(), before);
+  assert.equal(readFileSync(f.installer.destination('2025'), 'utf8'), before.years['2025'].manifest);
+  assert.deepEqual(f.installer.doctor().problems, []);
+});
+
+test('same-version rebuild stays pending while Revit is running and activates after closing', t => {
+  const f = fixture(t), source = f.payload('1.0.0');
+  f.installer.install(source);
+  const before = f.installer.state().years;
+  writeFileSync(join(source, 'dist/host/index.js'), 'replacement');
+  save(join(source, 'integrity.json'), inventory(source));
+  f.system.running = true;
+  assert.equal(f.installer.install(source, undefined, { replaceSameVersion: true }).registered.length, 0);
+  const pending = f.installer.state().pending;
+  assert.ok(pending.payloadVersion);
+  assert.deepEqual(f.installer.state().years, before);
+  f.system.running = false;
+  assert.equal(f.installer.install(f.installer.payload(pending.payloadVersion), pending.years, { replaceSameVersion: true }).registered.length, 2);
+});

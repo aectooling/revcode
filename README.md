@@ -1,13 +1,13 @@
 # Revcode
 
-[Release notes: 0.1.3](docs/releases/0.1.3.md)
+[Release notes: 0.1.4](docs/releases/0.1.4.md)
 
-0.1.3 fixes Windows installation failures reporting `ExtractToDirectory: Illegal characters in path` during `cli.mjs postinstall`.
+0.1.4 adds elapsed reply timers, inline tool calls, quick new-thread controls, thread deletion, and an archive manager with saved-history locations. Local rebuilds can replace an installed build without changing the version.
 
-After 0.1.3 is published, close Revit and install or upgrade from PowerShell:
+After 0.1.4 is published, close Revit and install or upgrade from PowerShell:
 
 ```powershell
-npm install -g --allow-scripts=@aectooling/revcode @aectooling/revcode@0.1.3
+npm install -g --allow-scripts=@aectooling/revcode @aectooling/revcode@0.1.4
 revcode install
 ```
 
@@ -28,7 +28,7 @@ pnpm run build:install
 
 Use `pnpm run build` to build only the host and browser. The checked-in pnpm workspace configuration allows the required esbuild and ZeroMQ install scripts and skips optional dependency scripts.
 
-`build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. `pnpm run build:install --open-revit` reopens Revit after installation, `pnpm run build:install --build-only` builds and verifies the package without installing, and `pnpm run build:install --revit-years 2025,2026` selects versions. The same flags work when calling Node directly: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
+`build:install` runs the production build, stages and verifies a versioned package, and registers the per-user add-in without prompting. Rebuilding the same version replaces the active build and retains the previous build for rollback; no version bump is needed for local iteration. `pnpm run build:install --open-revit` reopens Revit after installation, `pnpm run build:install --build-only` builds and verifies the package without installing, and `pnpm run build:install --revit-years 2025,2026` selects versions. The same flags work when calling Node directly: `node scripts/build-install.mjs --open-revit --revit-years 2025,2026`.
 
 Close Revit before activation. The installer registers compatible detected installations and copies a verified payload under `%LOCALAPPDATA%\Revcode\packages`. It does not require administrator privileges. Unsigned local builds may show Revit's standard add-in prompt. Use the [deployment guide](docs/DEPLOYMENT.md) for deferred activation, diagnostics, rollback, and complete removal.
 

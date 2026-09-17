@@ -35,7 +35,7 @@ export class Installer {
     return within(this.appData, join(this.appData, 'Autodesk', 'Revit', 'Addins', year, 'Revcode.addin'));
   }
   payload(version) {
-    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Invalid installed version.');
+    if (!/^\d+\.\d+\.\d+(?:-local-[a-f0-9]{64})?$/.test(version)) throw new Error('Invalid installed version.');
     return within(this.packages, join(this.packages, version));
   }
   state() { return existsSync(this.statePath) ? json(this.statePath) : { schema: 1, years: {}, pending: null, dataSchema: null }; }
@@ -124,7 +124,7 @@ export class Installer {
       }
     }
   }
-  stage(source) {
+  stage(source, replaceSameVersion = false) {
     mkdirSync(this.packages, { recursive: true });
     const temp = within(this.packages, join(this.packages, `.stage-${randomUUID()}`));
     try {
@@ -136,18 +136,34 @@ export class Installer {
         verify(source);
         cpSync(source, temp, { recursive: true, dereference: false });
       }
-      const info = verify(temp), target = this.payload(info.version);
+      const info = verify(temp);
+      const hash = digest(readFileSync(join(temp, 'integrity.json')));
+      const localVersion = `${info.version}-local-${hash}`;
+      const localTarget = this.payload(localVersion);
+      const installedLocalSource = resolve(source).toLowerCase() === localTarget.toLowerCase();
+      // Retrying a verified installed/pending build must keep its identity even
+      // after cleanup has removed the original canonical version directory.
+      let payloadVersion = installedLocalSource || (replaceSameVersion && existsSync(localTarget)) ? localVersion : info.version;
+      let target = this.payload(payloadVersion);
       if (existsSync(target)) {
         verify(target);
-        if (digest(readFileSync(join(target, 'integrity.json'))) !== digest(readFileSync(join(temp, 'integrity.json')))) throw new Error(`Version ${info.version} already exists with different contents.`);
+        if (digest(readFileSync(join(target, 'integrity.json'))) !== hash) {
+          if (payloadVersion === localVersion) throw new Error('Installed local build does not match its content identity.');
+          if (!replaceSameVersion) throw new Error(`Version ${info.version} already exists with different contents.`);
+          // Activate a separate verified build through the existing manifest transaction.
+          // Keep the old payload intact for rollback and other Revit registrations.
+          payloadVersion = localVersion;
+          target = localTarget;
+          renameSync(temp, target);
+        }
       } else renameSync(temp, target);
-      return info;
+      return { ...info, payloadVersion };
     } finally { if (existsSync(temp)) removeOwned(this.packages, temp); }
   }
-  install(source, years) {
+  install(source, years, { replaceSameVersion = false } = {}) {
     return this.locked(() => {
       this.recover();
-      const info = this.stage(source), before = this.state(), after = structuredClone(before);
+      const info = this.stage(source, replaceSameVersion), before = this.state(), after = structuredClone(before);
       if (before.dataSchema !== null && before.dataSchema !== info.dataSchema) throw new Error('This release needs an explicit user-data migration; automatic activation is disabled.');
       const requested = years ?? [...new Set(info.targets.map(target => target.year))];
       const system = this.probe(), pending = [], registered = [], changes = [];
@@ -159,14 +175,14 @@ export class Installer {
         this.conflicts(year);
         const old = this.checkOwnership(year, before);
         if (system.running) { pending.push({ year, reason: 'Close Revit and run revcode install to activate.' }); continue; }
-        const active = { version: info.version, target: choices[0].id };
-        const nextManifest = manifest(join(this.payload(info.version), 'addin', choices[0].id, 'Revcode.Revit.dll'));
+        const active = { version: info.version, target: choices[0].id, ...(info.payloadVersion !== info.version ? { payloadVersion: info.payloadVersion } : {}) };
+        const nextManifest = manifest(join(this.payload(info.payloadVersion), 'addin', choices[0].id, 'Revcode.Revit.dll'));
         const previous = before.years[year]?.active;
         after.years[year] = { active, previous: previous && JSON.stringify(previous) !== JSON.stringify(active) ? previous : before.years[year]?.previous ?? null, manifest: nextManifest };
         changes.push({ year, before: old, after: nextManifest });
         registered.push(year);
       }
-      after.pending = pending.length ? { version: info.version, years: pending.map(item => item.year) } : null;
+      after.pending = pending.length ? { version: info.version, ...(info.payloadVersion !== info.version ? { payloadVersion: info.payloadVersion } : {}), years: pending.map(item => item.year) } : null;
       if (registered.length) after.dataSchema = info.dataSchema;
       if (changes.length) this.transaction(before, after, changes);
       else save(this.statePath, after);
@@ -182,13 +198,13 @@ export class Installer {
       for (const year of years ?? Object.keys(before.years)) {
         const entry = before.years[year];
         if (!entry?.previous) throw new Error(`No retained previous release for Revit ${year}.`);
-        const info = verify(this.payload(entry.previous.version));
+        const info = verify(this.payload(entry.previous.payloadVersion ?? entry.previous.version));
         const target = info.targets.find(target => target.id === entry.previous.target);
         const installs = system.installs.filter(install => install.year === year);
         if (!target || !installs.length || !installs.every(install => compatible(target, install)) || info.dataSchema !== before.dataSchema) throw new Error(`Previous release is incompatible with Revit ${year} or current user data.`);
         this.conflicts(year);
         const old = this.checkOwnership(year, before);
-        const nextManifest = manifest(join(this.payload(entry.previous.version), 'addin', entry.previous.target, 'Revcode.Revit.dll'));
+        const nextManifest = manifest(join(this.payload(entry.previous.payloadVersion ?? entry.previous.version), 'addin', entry.previous.target, 'Revcode.Revit.dll'));
         after.years[year] = { active: entry.previous, previous: entry.active, manifest: nextManifest };
         changes.push({ year, before: old, after: nextManifest });
       }
@@ -213,8 +229,8 @@ export class Installer {
     });
   }
   cleanup(state = this.state()) {
-    const retained = new Set(Object.values(state.years).flatMap(entry => [entry.active?.version, entry.previous?.version]));
-    if (state.pending) retained.add(state.pending.version);
+    const retained = new Set(Object.values(state.years).flatMap(entry => [entry.active?.payloadVersion ?? entry.active?.version, entry.previous?.payloadVersion ?? entry.previous?.version]));
+    if (state.pending) retained.add(state.pending.payloadVersion ?? state.pending.version);
     const removed = [], deferred = [];
     if (this.probe().running || !existsSync(this.packages)) return { removed, deferred };
     // Registration is the source of truth even if another installer edited it.
@@ -233,7 +249,7 @@ export class Installer {
         }
       }
     } catch (error) { return { removed, deferred: [{ reason: `Cleanup deferred: ${error.message}` }] }; }
-    for (const version of readdirSync(this.packages).filter(version => /^\d+\.\d+\.\d+$/.test(version) && !retained.has(version))) {
+    for (const version of readdirSync(this.packages).filter(version => /^\d+\.\d+\.\d+(?:-local-[a-f0-9]{64})?$/.test(version) && !retained.has(version))) {
       const path = this.payload(version);
       if (resolve(process.execPath).toLowerCase().startsWith(`${path.toLowerCase()}\\`)) {
         deferred.push({ version, reason: 'Run scripts/deployment/uninstall.ps1 from this payload to remove its running Node runtime.' });
@@ -259,7 +275,7 @@ export class Installer {
       try {
         this.conflicts(year);
         if (this.checkOwnership(year, state) === null) throw new Error(`Missing registration for Revit ${year}.`);
-        const info = verify(this.payload(entry.active.version));
+        const info = verify(this.payload(entry.active.payloadVersion ?? entry.active.version));
         payloads[entry.active.version] = { nodeVersion: info.nodeVersion, dataSchema: info.dataSchema };
         const target = info.targets.find(target => target.id === entry.active.target);
         const installs = system.installs.filter(install => install.year === year);

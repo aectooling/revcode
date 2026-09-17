@@ -3,6 +3,11 @@ import { spawnSync } from 'node:child_process';
 export function run(command, args = [], { cwd = process.cwd(), env = {}, inherit = false, allowFailure = false } = {}) {
   let executable = command, argv = args;
   const environment = { ...process.env, ...env };
+  // npm run promotes .npmrc allow-scripts into an environment policy that npm
+  // 12 rejects for project installs. Let npm ci read the original config files.
+  if (command === 'npm' && args[0] === 'ci') {
+    for (const key of Object.keys(environment)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete environment[key];
+  }
   if (process.platform === 'win32' && /^(npm|pnpm)$/.test(command)) {
     executable = 'powershell.exe';
     const script = `$ProgressPreference = 'SilentlyContinue'\n$a = @(ConvertFrom-Json $env:REVCODE_COMMAND_ARGS)\n$c = $env:REVCODE_COMMAND\n& $c @a\nexit $LASTEXITCODE`;

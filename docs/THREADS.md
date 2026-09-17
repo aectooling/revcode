@@ -12,6 +12,10 @@ The browser remembers selection in session storage; each browser tab can browse 
 
 Journal version 3 stores thread metadata alongside existing request deduplication records. Version 1/2 history is associated with the `legacy` thread without rewriting immutable archives or inventing run associations. Messages and run summaries without a thread ID resolve to that thread. Run-detail retention limits still apply; threads do not preserve expired evidence indefinitely.
 
-Storage remains under the native instance's data directory. History survives browser refresh and host restart for that instance. Separate Revit instances retain independent histories; importing earlier instances, thread deletion, export, and bulk archive cleanup are not implemented here.
+Storage remains under the native instance's data directory. History survives browser refresh and host restart for that instance. Separate Revit instances retain independent histories; importing earlier instances and export are not implemented here. The three-dot button beside Archived opens the archive manager, which shows the exact journal and run-log paths with copy buttons. It remains available when the archive is empty.
+
+Delete permanently removes a thread and its saved messages, run details, and attached images after confirmation. Running threads and runs protected by pending outcomes or active skill authoring cannot be deleted. Revit changes, saved skills, and unrelated manual execution history remain. Deleting the last thread creates a new empty conversation; other tabs fall back to a remaining thread and clear the deleted draft.
+
+The archive manager can review up to 500 archived threads at a time, filtered by last activity older than a week, month, year, or all archived threads. The host rechecks the selected IDs, archive state, cutoff, and protected runs before deletion. Durable journal tombstones are saved before evidence removal so cleanup can finish after an interrupted deletion without restoring the deleted transcript.
 
 Validation: `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:threads` (production UI/host with a simulated agent; requires Edge). No live Revit model or provider is needed for the thread smoke test.

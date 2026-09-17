@@ -3,6 +3,8 @@ import { useEffect, useCallback, useLayoutEffect, useRef, useState } from "react
 import type { Message } from "../../../src/host/types";
 import { MessageMarkdown } from "./message-markdown";
 import { Button } from "./ui/button";
+import { RunActivity } from "./run-activity";
+import type { RunSummary } from "../../../src/host/history-types";
 const SUGGESTIONS = [
   "List the levels and their elevations.",
   "Tell me about the selected elements.",
@@ -88,6 +90,8 @@ export function Welcome({
 
 export function Conversation({
   messages,
+  runs,
+  api,
   busy,
   connected,
   configured,
@@ -97,6 +101,8 @@ export function Conversation({
   jumpMessageId,
 }: {
   messages: Message[];
+  runs: RunSummary[];
+  api<T>(path: string): Promise<T>;
   loadImage(id: string): Promise<Blob>;
   onViewTools?(runId: string): void;
   jumpMessageId?: string;
@@ -170,14 +176,6 @@ export function Conversation({
                 return (
                   <div key={message.id} id={`message-${message.id}`}>
                     <UserBubble text={message.text} images={message.images} loadImage={loadImage} />
-                    {message.runId && (
-                      <button
-                        className="mt-1 text-xs text-accent"
-                        onClick={() => onViewTools?.(message.runId!)}
-                      >
-                        View tools
-                      </button>
-                    )}
                   </div>
                 );
               if (message.role === "system")
@@ -190,22 +188,10 @@ export function Conversation({
                     {message.text}
                   </p>
                 );
-              const streaming = busy && message === last;
-              return (
-                <div
-                  key={message.id}
-                  id={`message-${message.id}`}
-                  className="min-w-0 animate-slide-up"
-                  aria-label="Revcode's reply"
-                >
-                  {message.runId && (
-                    <button
-                      className="text-xs text-accent"
-                      onClick={() => onViewTools?.(message.runId!)}
-                    >
-                      View tools
-                    </button>
-                  )}
+              const runSummary = runs.find(run => run.id === message.runId);
+              const streaming = busy && (runSummary ? runSummary.status === "running" : message === last);
+              const reply = (
+                <>
                   {message.text ? (
                     <div className="min-w-0 text-[14px] leading-7 text-ink">
                       <MessageMarkdown text={message.text} />
@@ -227,6 +213,15 @@ export function Conversation({
                   ) : (
                     <p className="text-[14px] text-muted">…</p>
                   )}
+                </>
+              );
+              return (
+                <div key={message.id} id={`message-${message.id}`} className="min-w-0 animate-slide-up" aria-label="Revcode's reply">
+                  {message.runId ? (
+                    <RunActivity runId={message.runId} summary={runSummary} busy={streaming} connected={connected} api={api} onViewTools={onViewTools}>
+                      {reply}
+                    </RunActivity>
+                  ) : reply}
                 </div>
               );
             })

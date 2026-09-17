@@ -30,6 +30,7 @@ import type {
 import { SkillsDialog } from "./components/skills-dialog";
 import type { SkillSummary } from "../../src/host/skills";
 import { useConsoleDraft } from "./lib/use-console-draft";
+import { ThreadManager } from "./components/thread-manager";
 import { Sidebar } from "./components/sidebar";
 import {
   ToastRegion,
@@ -54,6 +55,8 @@ import { DesktopPanel } from "./components/desktop-panel";
 import type { DesktopState } from "../../src/host/desktop-types";
 type HostState = {
   threads?: ThreadSummary[];
+  historyStorage?: { journalPath: string; runsPath: string };
+  protectedThreadIds?: string[];
   selectedThreadId?: string;
   activeThreadId?: string;
   hasOlderMessages?: boolean;
@@ -231,6 +234,7 @@ function App() {
     destinationSkillId?: string;
   }>();
   const [selectedRun, setSelectedRun] = useState("");
+  const [historyRevealRequest, setHistoryRevealRequest] = useState(0);
   const [olderMessages, setOlderMessages] = useState<Message[]>([]);
   const [jumpMessageId, setJumpMessageId] = useState("");
   const [steps, setSteps] = useState([
@@ -245,6 +249,7 @@ function App() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [threadManager, setThreadManager] = useState<{ target?: ThreadSummary }>();
   const [notices, setNotices] = useState<ToastNotice[]>([]);
   const toastId = useRef(0);
   const composer = useRef<ComposerHandle>(null);
@@ -296,6 +301,18 @@ function App() {
             next.selectedThreadId &&
             next.selectedThreadId !== selectedThreadId
           ) {
+            if (!next.threads?.some(thread => thread.id === selectedThreadId)) {
+              threadDrafts.current.delete(selectedThreadId);
+              const draft = threadDrafts.current.get(next.selectedThreadId);
+              setPrompt(draft?.prompt ?? "");
+              setImages(draft?.images ?? []);
+              setSelectedSkills(draft?.skills ?? []);
+              setAuthoringDraft(draft?.authoring);
+              setOlderMessages([]);
+              setOlderAvailable(undefined);
+              setSelectedRun("");
+              setJumpMessageId("");
+            }
             selectedThreadRef.current = next.selectedThreadId;
             setSelectedThreadId(next.selectedThreadId);
           }
@@ -696,6 +713,13 @@ function App() {
     );
   return (
     <TooltipProvider>
+      {threadManager && <ThreadManager target={threadManager.target} threads={state?.threads ?? []} protectedIds={[...(state?.protectedThreadIds ?? []), ...(state?.activeThreadId ? [state.activeThreadId] : [])]} storage={state?.historyStorage} online={hostOnline && !pending} onClose={() => setThreadManager(undefined)} onDelete={async (ids, before) => {
+        await api("/api/threads/delete", { threadIds: ids, ...(before !== undefined ? { archivedOnly: true, before } : {}) });
+        const next = await api<HostState>(`/api/state?threadId=${encodeURIComponent(selectedThreadRef.current)}`);
+        if (ids.includes(selectedThreadRef.current) && next.selectedThreadId) selectThread(next.selectedThreadId);
+        for (const id of ids) threadDrafts.current.delete(id);
+        setState(next);
+      }} />}
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas text-ink lg:flex-row">
         <a
           className="skip-link"
@@ -708,6 +732,8 @@ function App() {
           Skip to message
         </a>
         <Sidebar
+          onNewThread={() => void createThread()}
+          newThreadDisabled={!hostOnline || pending}
           threads={
             <ThreadList
               threads={state?.threads ?? []}
@@ -717,6 +743,9 @@ function App() {
               onSelect={selectThread}
               onCreate={() => void createThread()}
               onArchive={(thread) => void archiveThread(thread)}
+              protectedIds={state?.protectedThreadIds}
+              onDelete={thread => { setMobileOpen(false); setThreadManager({ target: thread }); }}
+              onManageArchived={() => { setMobileOpen(false); setThreadManager({}); }}
             />
           }
           desktop={state?.desktop}
@@ -812,6 +841,8 @@ function App() {
             }}
           />
           <Conversation
+            api={api}
+            runs={threadReady ? (state?.runs ?? []) : []}
             key={selectedThreadId}
             loadImage={loadHistoryImage}
             messages={[
@@ -821,7 +852,7 @@ function App() {
               ),
               ...(threadReady ? (state?.messages ?? []) : []),
             ]}
-            onViewTools={setSelectedRun}
+            onViewTools={id => { setSelectedRun(id); setHistoryRevealRequest(value => value + 1); }}
             jumpMessageId={jumpMessageId}
             busy={
               busy &&
@@ -917,6 +948,7 @@ function App() {
           online={hostOnline}
           activity={JSON.stringify(state?.runs ?? [])}
           selectedRun={selectedRun}
+          revealRequest={historyRevealRequest}
           onSelectRun={setSelectedRun}
           onJump={jumpToRun}
         />

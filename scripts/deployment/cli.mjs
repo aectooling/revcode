@@ -8,6 +8,7 @@ import { extract, manifestDetails, probe } from './windows.mjs';
 
 export function main(args = process.argv.slice(2)) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Revcode requires Windows x64.');
+  let replaceSameVersion = false;
   let command = args.shift() ?? 'help', years, source = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--revit-years') {
@@ -17,10 +18,12 @@ export function main(args = process.argv.slice(2)) {
     } else if (args[index] === '--package-path') {
       if (!args[index + 1]) throw new Error('--package-path needs a directory.');
       source = resolve(args[++index]);
-    } else throw new Error(`Unknown option: ${args[index]}`);
+    } else if (args[index] === '--replace-same-version') replaceSameVersion = true;
+    else throw new Error(`Unknown option: ${args[index]}`);
   }
+  if (replaceSameVersion && command !== 'install') throw new Error('--replace-same-version is only supported with install.');
   if (command === 'help' || command === '--help') {
-    console.log('revcode install [--revit-years 2025,2026,2027]\nrevcode doctor\nrevcode rollback [--revit-years 2025,2026,2027]\nrevcode uninstall [--revit-years 2025,2026,2027]\n\nClose Revit before activation, rollback, or removal. Removing the global CLI alone leaves the add-in installed.');
+    console.log('revcode install [--revit-years 2025,2026,2027] [--replace-same-version]\nrevcode doctor\nrevcode rollback [--revit-years 2025,2026,2027]\nrevcode uninstall [--revit-years 2025,2026,2027]\n\nClose Revit before activation, rollback, or removal. Removing the global CLI alone leaves the add-in installed.');
     return;
   }
   for (const name of ['LOCALAPPDATA', 'APPDATA', 'ProgramData']) if (!process.env[name]) throw new Error(`Missing Windows environment variable: ${name}`);
@@ -39,10 +42,10 @@ export function main(args = process.argv.slice(2)) {
     if (!existsSync(join(source, 'payload.zip')) && !existsSync(join(source, 'integrity.json'))) {
       const pending = installer.state().pending;
       if (!pending) throw new Error('No prepared payload found. Build a package or run the installed revcode CLI.');
-      source = installer.payload(pending.version);
+      source = installer.payload(pending.payloadVersion ?? pending.version);
       years ??= pending.years;
     }
-    result = installer.install(source, years);
+    result = installer.install(source, years, { replaceSameVersion });
   } else if (command === 'rollback') result = installer.rollback(years);
   else if (command === 'uninstall') result = installer.uninstall(years);
   else if (command === 'doctor') {

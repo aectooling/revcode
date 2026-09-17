@@ -286,6 +286,31 @@ export class RunHistory {
       Object.assign(detail.run, copy.run);
     });
   }
+  /** Called after the host durably records deletion intent. */
+  deleteThread(threadId: string) {
+    return this.serialize(async () => {
+      const targets = [...this.summaries.values()].filter(run => (run.threadId ?? "legacy") === threadId);
+      if (targets.some(run => run.status === "running" || this.protected.has(run.id)))
+        throw new Error("Thread still has running or unresolved operations.");
+      for (const run of targets) {
+        const detail = await this.readDetail(run.id);
+        const artifacts = new Set([
+          ...detail.calls.flatMap(call => call.artifacts ?? []),
+          ...detail.messages.flatMap(message => (message.images ?? []).flatMap(image => image.artifact ? [image.artifact] : [])),
+        ]);
+        for (const artifact of artifacts) {
+          const file = this.artifactFile(artifact);
+          const size = await stat(file).then(value => value.size, () => 0);
+          await rm(file, { force: true });
+          this.artifactBytes = Math.max(0, this.artifactBytes - size);
+        }
+        await rm(this.file(run.id, "detail"), { force: true });
+        await rm(this.file(run.id, "summary"), { force: true });
+        this.summaries.delete(run.id);
+      }
+    });
+  }
+
   /** Admission rollback only, before any tool/native activity could have begun. */
   discardUnaccepted(id: string) {
     return this.serialize(async () => {
